@@ -1,18 +1,62 @@
 import type { Request, Response, NextFunction } from 'express';
 import { UnauthorizedError } from '../utils/errors';
+import { verifyAccessToken } from '../utils/jwt';
+import { User } from '../modules/users/user.model';
+import { USER_STATUS } from '../modules/users/user.types';
+import {
+  ROLE_PERMISSIONS,
+  type Role
+} from '../modules/permissions/permissions.constants';
 
-// Placeholder. Real JWT verification + user hydration lands in module 02
-// (02-auth-and-sessions.md). For now this rejects every request so route
-// wiring can be exercised without leaking access; do not soften it.
-export const requireAuth = (
+export const requireAuth = async (
   req: Request,
   _res: Response,
   next: NextFunction
-): void => {
+): Promise<void> => {
   const header = req.header('authorization');
   if (!header || !header.toLowerCase().startsWith('bearer ')) {
     next(new UnauthorizedError());
     return;
   }
-  next(new UnauthorizedError('Token verification not yet implemented'));
+  const token = header.slice(7).trim();
+  if (!token) {
+    next(new UnauthorizedError());
+    return;
+  }
+
+  let payload;
+  try {
+    payload = verifyAccessToken(token);
+  } catch {
+    next(new UnauthorizedError('Invalid or expired token'));
+    return;
+  }
+
+  try {
+    const user = await User.findById(payload.sub).select('+passwordChangedAt');
+    if (!user || user.status !== USER_STATUS.ACTIVE) {
+      next(new UnauthorizedError());
+      return;
+    }
+
+    // Token issued before the user's password change is no longer trusted.
+    if (
+      user.passwordChangedAt &&
+      typeof payload.iat === 'number' &&
+      payload.iat * 1000 < user.passwordChangedAt.getTime()
+    ) {
+      next(new UnauthorizedError('Token is no longer valid'));
+      return;
+    }
+
+    const role = user.role as Role;
+    req.user = {
+      id: user._id.toString(),
+      role,
+      permissions: ROLE_PERMISSIONS[role]
+    };
+    next();
+  } catch (err) {
+    next(err);
+  }
 };

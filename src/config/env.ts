@@ -13,8 +13,12 @@ const schema = z.object({
   REDIS_URL: z.string().min(1).optional(),
   JWT_ACCESS_SECRET: z.string().min(1).optional(),
   JWT_REFRESH_SECRET: z.string().min(1).optional(),
+  JWT_ISSUER: z.string().min(1).default('messenger-api'),
+  JWT_AUDIENCE: z.string().min(1).default('messenger-clients'),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
-  REFRESH_TOKEN_TTL: z.string().default('30d')
+  REFRESH_TOKEN_TTL: z.string().default('30d'),
+  PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(128).default(8),
+  PASSWORD_MAX_LENGTH: z.coerce.number().int().min(8).max(256).default(128)
 });
 
 const parsed = schema.safeParse(process.env);
