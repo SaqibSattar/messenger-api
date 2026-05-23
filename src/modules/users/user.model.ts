@@ -1,5 +1,10 @@
 import mongoose, { Schema, type Model } from 'mongoose';
-import { ROLES, type Role } from '../permissions/permissions.constants';
+import {
+  ALL_PERMISSIONS,
+  ROLES,
+  type Permission,
+  type Role
+} from '../permissions/permissions.constants';
 import { USER_STATUS, type UserDto, type UserStatus } from './user.types';
 
 export interface UserAttrs {
@@ -9,6 +14,7 @@ export interface UserAttrs {
   displayName: string;
   avatarUrl?: string;
   role: Role;
+  customPermissions: Permission[];
   status: UserStatus;
   emailVerifiedAt?: Date;
   phoneVerifiedAt?: Date;
@@ -42,6 +48,15 @@ const userSchema = new Schema<UserDocument>(
       enum: Object.values(ROLES),
       default: ROLES.MEMBER,
       required: true
+    },
+    customPermissions: {
+      type: [
+        {
+          type: String,
+          enum: [...ALL_PERMISSIONS]
+        }
+      ],
+      default: []
     },
     status: {
       type: String,
@@ -79,6 +94,9 @@ export const toUserDto = (user: UserDocument): UserDto => {
   if (user.email) dto.email = user.email;
   if (user.phone) dto.phone = user.phone;
   if (user.avatarUrl) dto.avatarUrl = user.avatarUrl;
+  if (user.customPermissions && user.customPermissions.length > 0) {
+    dto.customPermissions = [...user.customPermissions];
+  }
   if (user.emailVerifiedAt)
     dto.emailVerifiedAt = user.emailVerifiedAt.toISOString();
   if (user.phoneVerifiedAt)

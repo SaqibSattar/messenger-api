@@ -12,6 +12,7 @@ import { ok } from './utils/apiResponse';
 import { isMongoReady } from './db/mongo';
 import { isRedisReady } from './db/redis';
 import { authRouter } from './modules/auth/auth.routes';
+import { adminRouter } from './modules/admin/admin.routes';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -63,6 +64,7 @@ export const buildApp = (): Express => {
   });
 
   app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1/admin', adminRouter);
 
   app.use(notFound);
   app.use(errorHandler);

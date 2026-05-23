@@ -4,7 +4,7 @@ import { verifyAccessToken } from '../utils/jwt';
 import { User } from '../modules/users/user.model';
 import { USER_STATUS } from '../modules/users/user.types';
 import {
-  ROLE_PERMISSIONS,
+  resolveEffectivePermissions,
   type Role
 } from '../modules/permissions/permissions.constants';
 
@@ -53,7 +53,7 @@ export const requireAuth = async (
     req.user = {
       id: user._id.toString(),
       role,
-      permissions: ROLE_PERMISSIONS[role]
+      permissions: resolveEffectivePermissions(role, user.customPermissions)
     };
     next();
   } catch (err) {

@@ -1,4 +1,4 @@
-import type { Role } from '../permissions/permissions.constants';
+import type { Permission, Role } from '../permissions/permissions.constants';
 
 export const USER_STATUS = {
   ACTIVE: 'active',
@@ -15,6 +15,10 @@ export interface UserDto {
   displayName: string;
   avatarUrl?: string;
   role: Role;
+  // Only included when the user has any custom permission overrides — keeping
+  // it absent on the common case avoids leaking the permission shape and keeps
+  // payloads small.
+  customPermissions?: Permission[];
   status: UserStatus;
   emailVerifiedAt?: string;
   phoneVerifiedAt?: string;

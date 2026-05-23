@@ -8,10 +8,12 @@ import { requireRole } from '../middleware/requireRole';
 import { requirePermission } from '../middleware/requirePermission';
 import { errorHandler } from '../middleware/errorHandler';
 import {
+  ALL_PERMISSIONS,
   PERMISSIONS,
   ROLES,
   ROLE_PERMISSIONS,
   hasPermission,
+  resolveEffectivePermissions,
   type Permission,
   type Role
 } from '../modules/permissions/permissions.constants';
@@ -32,19 +34,64 @@ describe('permission constants', () => {
     );
   });
 
-  it('escalates moderator to include moderation permissions', () => {
+  it('escalates moderator to include moderation permissions only', () => {
     expect(hasPermission(ROLES.MODERATOR, PERMISSIONS.MESSAGE_MODERATE)).toBe(
+      true
+    );
+    expect(hasPermission(ROLES.MODERATOR, PERMISSIONS.MEDIA_MODERATE)).toBe(
       true
     );
     expect(hasPermission(ROLES.MODERATOR, PERMISSIONS.ADMIN_AUDIT_READ)).toBe(
       false
     );
+    expect(hasPermission(ROLES.MODERATOR, PERMISSIONS.ADMIN_USERS_MANAGE)).toBe(
+      false
+    );
+  });
+
+  it('grants admin user-management and audit permissions', () => {
+    expect(hasPermission(ROLES.ADMIN, PERMISSIONS.ADMIN_USERS_MANAGE)).toBe(true);
+    expect(hasPermission(ROLES.ADMIN, PERMISSIONS.ADMIN_USERS_READ)).toBe(true);
+    expect(hasPermission(ROLES.ADMIN, PERMISSIONS.ADMIN_AUDIT_READ)).toBe(true);
+    expect(hasPermission(ROLES.ADMIN, PERMISSIONS.ADMIN_SYSTEM_READ)).toBe(true);
   });
 
   it('grants super-admin every defined permission', () => {
-    for (const p of Object.values(PERMISSIONS)) {
+    for (const p of ALL_PERMISSIONS) {
       expect(ROLE_PERMISSIONS[ROLES.SUPER_ADMIN]).toContain(p);
     }
+  });
+
+  it('does not declare duplicate permission strings', () => {
+    const values = Object.values(PERMISSIONS);
+    const unique = new Set(values);
+    expect(unique.size).toBe(values.length);
+  });
+
+  it('does not duplicate permissions within any role mapping', () => {
+    for (const role of Object.values(ROLES)) {
+      const perms = ROLE_PERMISSIONS[role];
+      expect(new Set(perms).size).toBe(perms.length);
+    }
+  });
+});
+
+describe('resolveEffectivePermissions', () => {
+  it('returns role permissions when no custom permissions are supplied', () => {
+    const effective = resolveEffectivePermissions(ROLES.MEMBER);
+    expect(effective).toEqual(ROLE_PERMISSIONS[ROLES.MEMBER]);
+  });
+
+  it('adds custom permissions on top of role permissions without duplicating', () => {
+    const effective = resolveEffectivePermissions(ROLES.MEMBER, [
+      PERMISSIONS.MESSAGE_MODERATE,
+      PERMISSIONS.MESSAGE_CREATE // already in member set
+    ]);
+    expect(effective).toContain(PERMISSIONS.MESSAGE_MODERATE);
+    // No duplicates of the already-granted member permission.
+    expect(effective.filter((p) => p === PERMISSIONS.MESSAGE_CREATE)).toHaveLength(
+      1
+    );
   });
 });
 
@@ -128,5 +175,12 @@ describe('requirePermission middleware', () => {
       })
     ).get('/mod');
     expect(res.status).toBe(200);
+  });
+
+  it('denies by default — empty permissions deny restricted routes', async () => {
+    const res = await request(
+      build({ id: 'u1', role: ROLES.MEMBER, permissions: [] })
+    ).get('/mod');
+    expect(res.status).toBe(403);
   });
 });
