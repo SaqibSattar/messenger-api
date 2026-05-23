@@ -58,7 +58,7 @@ src/modules/sessions/
 User:
 
 - email or phone
-- passwordHash
+- password
 - displayName
 - avatarUrl
 - status
