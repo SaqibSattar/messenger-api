@@ -10,6 +10,7 @@ versioning/deprecation policy), start at [`docs/api/README.md`](docs/api/README.
 Operational and architecture docs:
 
 - [`docs/PRIVACY_RETENTION.md`](docs/PRIVACY_RETENTION.md) — retention windows, account-deletion flow, what the sweep jobs do.
+- [`docs/BACKUP_RESTORE_DR.md`](docs/BACKUP_RESTORE_DR.md) — backup scope, restore order, disaster runbooks, and known production risks.
 - [`docs/E2EE_ARCHITECTURE.md`](docs/E2EE_ARCHITECTURE.md) — proposed end-to-end encryption design. **Not implemented** — design document only, per prompt 17.
 
 ---
@@ -151,7 +152,9 @@ the rest are the operator's responsibility.
 - [ ] Redis has auth or runs on a private network — Socket.IO adapter
       and rate-limit counters live here.
 - [ ] Backups: Mongo dumps on a known cadence; Redis state is treated as
-      cache and rebuilt on restart.
+      cache and rebuilt on restart. See
+      [`docs/BACKUP_RESTORE_DR.md`](docs/BACKUP_RESTORE_DR.md) for the
+      backup scope, restore order, and runbooks.
 
 ### Storage
 - [ ] If S3: bucket policy is private, signed-URL TTLs are short
