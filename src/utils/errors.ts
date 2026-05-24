@@ -1,10 +1,17 @@
+import { ERROR_CODES, type ErrorCode } from './errorCodes';
+
 export class AppError extends Error {
   public readonly status: number;
-  public readonly code: string;
+  public readonly code: ErrorCode | string;
   public readonly details?: unknown;
   public readonly expose: boolean;
 
-  constructor(status: number, code: string, message: string, details?: unknown) {
+  constructor(
+    status: number,
+    code: ErrorCode | string,
+    message: string,
+    details?: unknown
+  ) {
     super(message);
     this.name = this.constructor.name;
     this.status = status;
@@ -16,42 +23,42 @@ export class AppError extends Error {
 
 export class BadRequestError extends AppError {
   constructor(message = 'Bad request', details?: unknown) {
-    super(400, 'BAD_REQUEST', message, details);
+    super(400, ERROR_CODES.BAD_REQUEST, message, details);
   }
 }
 
 export class ValidationError extends AppError {
   constructor(details: unknown, message = 'Invalid request') {
-    super(400, 'VALIDATION_ERROR', message, details);
+    super(400, ERROR_CODES.VALIDATION_ERROR, message, details);
   }
 }
 
 export class UnauthorizedError extends AppError {
   constructor(message = 'Authentication required') {
-    super(401, 'UNAUTHORIZED', message);
+    super(401, ERROR_CODES.UNAUTHORIZED, message);
   }
 }
 
 export class ForbiddenError extends AppError {
   constructor(message = 'Forbidden') {
-    super(403, 'FORBIDDEN', message);
+    super(403, ERROR_CODES.FORBIDDEN, message);
   }
 }
 
 export class NotFoundError extends AppError {
   constructor(message = 'Resource not found') {
-    super(404, 'NOT_FOUND', message);
+    super(404, ERROR_CODES.NOT_FOUND, message);
   }
 }
 
 export class ConflictError extends AppError {
   constructor(message = 'Conflict') {
-    super(409, 'CONFLICT', message);
+    super(409, ERROR_CODES.CONFLICT, message);
   }
 }
 
 export class TooManyRequestsError extends AppError {
   constructor(message = 'Too many requests') {
-    super(429, 'RATE_LIMITED', message);
+    super(429, ERROR_CODES.RATE_LIMITED, message);
   }
 }

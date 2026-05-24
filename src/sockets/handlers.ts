@@ -2,6 +2,7 @@ import mongoose, { type Types } from 'mongoose';
 import { z, type ZodError } from 'zod';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
+import { ERROR_CODES } from '../utils/errorCodes';
 import { ConversationMember } from '../modules/conversations/conversationMember.model';
 import { markDelivered, markRead } from '../modules/messages/message.service';
 import type { AppServer, AppSocket } from './auth';
@@ -42,7 +43,7 @@ const parsePayload = <T>(
   const result = schema.safeParse(payload);
   if (!result.success) {
     const err: ZodError = result.error;
-    ackErr(cb, 'VALIDATION_ERROR', 'Invalid payload', err.flatten());
+    ackErr(cb, ERROR_CODES.VALIDATION_ERROR, 'Invalid payload', err.flatten());
     return null;
   }
   return result.data;
@@ -107,7 +108,7 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
       try {
         const ok = await isActiveMember(data.conversationId, user.id);
         if (!ok) {
-          ackErr(cb, 'FORBIDDEN', 'Not a member of this conversation');
+          ackErr(cb, ERROR_CODES.FORBIDDEN, 'Not a member of this conversation');
           return;
         }
         await socket.join(conversationRoom(data.conversationId));
@@ -115,7 +116,7 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
         ackOk(cb);
       } catch (err) {
         log.error({ err }, 'conversation.join failed');
-        ackErr(cb, 'INTERNAL', 'Could not join conversation');
+        ackErr(cb, ERROR_CODES.INTERNAL, 'Could not join conversation');
       }
     }
   );
@@ -146,14 +147,14 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
     if (!data) return;
 
     if (!allow(socket.id, `typing.${kind}`, env.SOCKET_TYPING_MAX_PER_MINUTE)) {
-      ackErr(cb, 'RATE_LIMITED', 'Too many typing events');
+      ackErr(cb, ERROR_CODES.RATE_LIMITED, 'Too many typing events');
       return;
     }
 
     try {
       const ok = await isActiveMember(data.conversationId, user.id);
       if (!ok) {
-        ackErr(cb, 'FORBIDDEN', 'Not a member of this conversation');
+        ackErr(cb, ERROR_CODES.FORBIDDEN, 'Not a member of this conversation');
         return;
       }
 
@@ -170,7 +171,7 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
       ackOk(cb);
     } catch (err) {
       log.error({ err, kind }, 'typing event failed');
-      ackErr(cb, 'INTERNAL', 'Could not process typing event');
+      ackErr(cb, ERROR_CODES.INTERNAL, 'Could not process typing event');
     }
   };
 
@@ -204,7 +205,7 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
       ackOk(cb);
     } catch (err) {
       const status = (err as { status?: number }).status ?? 500;
-      const code = (err as { code?: string }).code ?? 'INTERNAL';
+      const code = (err as { code?: string }).code ?? ERROR_CODES.INTERNAL;
       const message = (err as { message?: string }).message ?? 'Failed';
       if (status >= 500) {
         log.error({ err, kind }, 'receipt event failed');
@@ -231,7 +232,7 @@ export const registerSocketHandlers = (io: AppServer, socket: AppSocket): void =
       ackOk(cb);
     } catch (err) {
       log.error({ err }, 'presence.ping failed');
-      ackErr(cb, 'INTERNAL', 'Could not refresh presence');
+      ackErr(cb, ERROR_CODES.INTERNAL, 'Could not refresh presence');
     }
   });
 

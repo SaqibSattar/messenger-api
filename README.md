@@ -4,6 +4,9 @@ Production-grade messenger backend. Node.js + TypeScript, Express, MongoDB,
 Redis, Socket.IO. See [`AGENTS.md`](AGENTS.md) for the canonical engineering
 spec and security rules — this README only covers operational concerns.
 
+For **client integration** (REST routes, socket events, error codes, the
+versioning/deprecation policy), start at [`docs/api/README.md`](docs/api/README.md).
+
 ---
 
 ## Quick start (local development)

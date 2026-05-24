@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { AppError } from '../utils/errors';
+import { ERROR_CODES } from '../utils/errorCodes';
 import { logger } from '../utils/logger';
 import { env } from '../config/env';
 
@@ -14,7 +15,7 @@ export const errorHandler = (
     res.status(400).json({
       success: false,
       error: {
-        code: 'INVALID_JSON',
+        code: ERROR_CODES.INVALID_JSON,
         message: 'Malformed JSON in request body'
       }
     });
@@ -32,7 +33,7 @@ export const errorHandler = (
     res.status(413).json({
       success: false,
       error: {
-        code: 'PAYLOAD_TOO_LARGE',
+        code: ERROR_CODES.PAYLOAD_TOO_LARGE,
         message: 'Request body exceeds the configured limit'
       }
     });
@@ -43,7 +44,7 @@ export const errorHandler = (
     res.status(400).json({
       success: false,
       error: {
-        code: 'VALIDATION_ERROR',
+        code: ERROR_CODES.VALIDATION_ERROR,
         message: 'Invalid request',
         details: err.flatten()
       }
@@ -78,7 +79,7 @@ export const errorHandler = (
   res.status(500).json({
     success: false,
     error: {
-      code: 'INTERNAL_ERROR',
+      code: ERROR_CODES.INTERNAL_ERROR,
       message: env.isProd ? 'Internal server error' : error.message
     }
   });
