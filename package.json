@@ -13,7 +13,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "jest --runInBand",
-    "test:ci": "jest --runInBand --ci"
+    "test:ci": "jest --runInBand --ci",
+    "migrate": "tsx src/db/runMigrations.ts",
+    "seed:dev": "tsx src/db/seed.ts"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
