@@ -31,7 +31,12 @@ export const getPublicProfileHandler = async (
   req: Request,
   res: Response
 ): Promise<void> => {
-  const user = await userService.getPublicProfile(req.params.userId);
+  // Viewer id is optional — when the request is authenticated we use it for
+  // the audience-scoped privacy gate on avatar visibility.
+  const user = await userService.getPublicProfile(
+    req.params.userId,
+    req.user?.id
+  );
   ok(res, { user });
 };
 
@@ -41,7 +46,7 @@ export const searchUsersHandler = async (
 ): Promise<void> => {
   if (!req.user) throw new UnauthorizedError();
   const input = req.query as unknown as SearchUsersInput;
-  const users = await userService.searchUsers(input);
+  const users = await userService.searchUsers(input, req.user.id);
   ok(res, { users });
 };
 

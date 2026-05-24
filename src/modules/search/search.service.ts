@@ -17,6 +17,7 @@ import {
 } from '../messages/message.model';
 import { User, toPublicUserDto } from '../users/user.model';
 import { USER_STATUS } from '../users/user.types';
+import { canDiscoverUser } from '../privacy/privacy.service';
 import type {
   SearchConversationsQuery,
   SearchMessagesQuery,
@@ -202,6 +203,10 @@ export const searchMessages = async (
 // it accepts a substring against `username` and a prefix-style match against
 // `displayName`. Privacy gates:
 //   - Only users with `discoverableByUsername` set to true are surfaced.
+//   - Users whose `whoCanFindMe` excludes the caller (e.g. set to `nobody`,
+//     or set to `contacts` for a non-contact caller) are filtered out
+//     post-query. We over-fetch slightly and then filter so the caller can't
+//     enumerate "this user exists but I can't see them" via cardinality.
 //   - Deactivated/suspended users never appear.
 //   - The caller themselves never appears in their own results.
 // Returned shape is always the public DTO — never the full UserDto.
@@ -211,6 +216,10 @@ export const searchUsersByText = async (
 ): Promise<SearchUsersResult> => {
   const regex = buildLiteralRegex(query.q);
 
+  // Over-fetch so post-filtering for the audience gate doesn't shrink the
+  // page below the cap. 3x is conservative — most users keep the default
+  // `whoCanFindMe: everyone` so the filter step is a no-op.
+  const overfetchLimit = Math.min(query.limit * 3, query.limit + 50);
   const docs = await User.find({
     _id: { $ne: toObjectId(actor.id) },
     status: USER_STATUS.ACTIVE,
@@ -218,7 +227,13 @@ export const searchUsersByText = async (
     $or: [{ username: regex }, { displayName: regex }]
   })
     .sort({ _id: 1 })
-    .limit(query.limit);
+    .limit(overfetchLimit);
 
-  return { items: docs.map(toPublicUserDto) };
+  const items = [];
+  for (const u of docs) {
+    if (items.length >= query.limit) break;
+    if (!(await canDiscoverUser(actor.id, u))) continue;
+    items.push(toPublicUserDto(u));
+  }
+  return { items };
 };

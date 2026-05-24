@@ -37,6 +37,12 @@ import {
   notificationRouter
 } from './modules/notifications/notification.routes';
 import { searchRouter } from './modules/search/search.routes';
+import { contactRouter } from './modules/contacts/contact.routes';
+import {
+  conversationInvitesRouter,
+  inviteRouter
+} from './modules/invites/invite.routes';
+import { privacyRouter } from './modules/privacy/privacy.routes';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -133,6 +139,10 @@ export const buildApp = (): Express => {
     '/api/v1/conversations/:conversationId/messages',
     conversationMessagesRouter
   );
+  app.use(
+    '/api/v1/conversations/:conversationId/invites',
+    conversationInvitesRouter
+  );
   app.use('/api/v1/conversations', conversationRouter);
   app.use('/api/v1/messages', messageRouter);
   app.use('/api/v1/media', mediaRouter);
@@ -143,6 +153,9 @@ export const buildApp = (): Express => {
   app.use('/api/v1/search', searchRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/notification-preferences', notificationPreferencesRouter);
+  app.use('/api/v1/contacts', contactRouter);
+  app.use('/api/v1/invites', inviteRouter);
+  app.use('/api/v1/privacy-settings', privacyRouter);
   app.use('/api/v1/admin', adminRouter);
 
   app.use(notFound);

@@ -9,6 +9,7 @@ import { auditDisappearingMessagesChange } from '../../utils/audit';
 import { emitRealtime } from '../../services/realtimeEvents';
 import { User } from '../users/user.model';
 import { USER_STATUS } from '../users/user.types';
+import { canMessageUser } from '../privacy/privacy.service';
 import {
   assertCanManageConversationMembers,
   assertCanManageDisappearingMessages,
@@ -160,8 +161,22 @@ export const createDirectConversation = async (
 
   const directKey = buildDirectKey(actor.id, input.participantId);
 
-  // Fast path: already exists.
+  // Fast path: already exists. Privacy doesn't retroactively tear down a
+  // pre-existing conversation, so we only run the whoCanMessageMe gate on
+  // first-time creation.
   const existing = await Conversation.findOne({ directKey });
+  if (!existing) {
+    const target = await User.findById(input.participantId);
+    if (!target) {
+      throw new BadRequestError('One or more users do not exist or are not active');
+    }
+    if (!(await canMessageUser(actor.id, target))) {
+      // Mirror the block-rule error wording so privacy settings cannot be
+      // probed via the response text.
+      throw new ForbiddenError('Cannot start a conversation with this user');
+    }
+  }
+
   if (existing) {
     const membership = await ConversationMember.findOne({
       conversationId: existing._id,

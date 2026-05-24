@@ -27,6 +27,7 @@ import { attachToMessage } from '../media/media.service';
 import { ATTACHMENT_STATUS } from '../media/media.types';
 import { User } from '../users/user.model';
 import { isBlockedBetween } from '../moderation/block.service';
+import { canMessageUser } from '../privacy/privacy.service';
 import { createNotification } from '../notifications/notification.service';
 import {
   NOTIFICATION_ENTITY_TYPE,
@@ -239,11 +240,21 @@ export const sendMessage = async (
     throw new ForbiddenError('Only conversation admins can post here');
   }
 
-  // Direct-conversation block rule. The error wording deliberately doesn't
-  // reveal which side initiated the block.
+  // Direct-conversation block + messaging-privacy rule. The error wording
+  // deliberately doesn't reveal which side initiated the block or whether
+  // the receiver's privacy setting (vs a block) caused the rejection.
   const counterpartyId = await findDirectCounterpartyId(conv, actor.id);
-  if (counterpartyId && (await isBlockedBetween(actor.id, counterpartyId))) {
-    throw new ForbiddenError('Cannot send messages to this conversation');
+  if (counterpartyId) {
+    if (await isBlockedBetween(actor.id, counterpartyId)) {
+      throw new ForbiddenError('Cannot send messages to this conversation');
+    }
+    // Re-evaluate the receiver's whoCanMessageMe at send time so a setting
+    // tightened *after* the conversation was created (e.g. flipped from
+    // `everyone` to `contacts` after a falling-out) stops new messages.
+    const counterparty = await User.findById(counterpartyId);
+    if (counterparty && !(await canMessageUser(actor.id, counterparty))) {
+      throw new ForbiddenError('Cannot send messages to this conversation');
+    }
   }
 
   if (input.replyToMessageId) {

@@ -188,6 +188,10 @@ The test suite covers the security-critical surfaces called out in
 - story visibility and expiration
 - media upload restrictions
 - socket authentication
+- contacts and contact-request lifecycle (block/self-request/duplicate rules)
+- invite links (token hashing, expiry, revocation, maxUses, block bypass)
+- privacy settings enforcement (`whoCanFindMe` / `whoCanMessageMe` /
+  `profilePhotoVisibility` gating search, DM creation, and public profile)
 - global error handler, validation middleware, request timeout, CORS,
   body limit, security headers
 

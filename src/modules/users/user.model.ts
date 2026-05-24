@@ -7,6 +7,7 @@ import {
 } from '../permissions/permissions.constants';
 import {
   DEFAULT_PRIVACY_SETTINGS,
+  PRIVACY_AUDIENCES,
   USER_STATUS,
   type PrivacySettings,
   type PublicUserDto,
@@ -44,7 +45,31 @@ const privacySchema = new Schema<PrivacySettings>(
     discoverableByPhone: { type: Boolean, default: true },
     discoverableByUsername: { type: Boolean, default: true },
     showLastSeen: { type: Boolean, default: true },
-    showOnlineStatus: { type: Boolean, default: true }
+    showOnlineStatus: { type: Boolean, default: true },
+    whoCanFindMe: {
+      type: String,
+      enum: [...PRIVACY_AUDIENCES],
+      default: DEFAULT_PRIVACY_SETTINGS.whoCanFindMe
+    },
+    whoCanMessageMe: {
+      type: String,
+      enum: [...PRIVACY_AUDIENCES],
+      default: DEFAULT_PRIVACY_SETTINGS.whoCanMessageMe
+    },
+    readReceiptsEnabled: {
+      type: Boolean,
+      default: DEFAULT_PRIVACY_SETTINGS.readReceiptsEnabled
+    },
+    onlineStatusVisibility: {
+      type: String,
+      enum: [...PRIVACY_AUDIENCES],
+      default: DEFAULT_PRIVACY_SETTINGS.onlineStatusVisibility
+    },
+    profilePhotoVisibility: {
+      type: String,
+      enum: [...PRIVACY_AUDIENCES],
+      default: DEFAULT_PRIVACY_SETTINGS.profilePhotoVisibility
+    }
   },
   { _id: false }
 );
@@ -136,9 +161,24 @@ const resolvePrivacy = (user: UserDocument): PrivacySettings => {
     showLastSeen:
       plain?.showLastSeen ?? DEFAULT_PRIVACY_SETTINGS.showLastSeen,
     showOnlineStatus:
-      plain?.showOnlineStatus ?? DEFAULT_PRIVACY_SETTINGS.showOnlineStatus
+      plain?.showOnlineStatus ?? DEFAULT_PRIVACY_SETTINGS.showOnlineStatus,
+    whoCanFindMe:
+      plain?.whoCanFindMe ?? DEFAULT_PRIVACY_SETTINGS.whoCanFindMe,
+    whoCanMessageMe:
+      plain?.whoCanMessageMe ?? DEFAULT_PRIVACY_SETTINGS.whoCanMessageMe,
+    readReceiptsEnabled:
+      plain?.readReceiptsEnabled ??
+      DEFAULT_PRIVACY_SETTINGS.readReceiptsEnabled,
+    onlineStatusVisibility:
+      plain?.onlineStatusVisibility ??
+      DEFAULT_PRIVACY_SETTINGS.onlineStatusVisibility,
+    profilePhotoVisibility:
+      plain?.profilePhotoVisibility ??
+      DEFAULT_PRIVACY_SETTINGS.profilePhotoVisibility
   };
 };
+
+export const resolvePrivacySettings = resolvePrivacy;
 
 export const toUserDto = (user: UserDocument): UserDto => {
   const dto: UserDto = {

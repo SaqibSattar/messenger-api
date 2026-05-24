@@ -77,7 +77,12 @@ describe('GET /api/v1/users/me', () => {
       discoverableByPhone: true,
       discoverableByUsername: true,
       showLastSeen: true,
-      showOnlineStatus: true
+      showOnlineStatus: true,
+      whoCanFindMe: 'everyone',
+      whoCanMessageMe: 'everyone',
+      readReceiptsEnabled: true,
+      onlineStatusVisibility: 'everyone',
+      profilePhotoVisibility: 'everyone'
     });
   });
 });

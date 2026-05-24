@@ -22,6 +22,10 @@ import {
   type PublicUserDto,
   type UserDto
 } from './user.types';
+import {
+  canDiscoverUser,
+  canSeeProfilePhoto
+} from '../privacy/privacy.service';
 import type {
   DeactivateAccountInput,
   SearchUsersInput,
@@ -33,7 +37,12 @@ const ALLOWED_DISCOVERABILITY_FIELDS = new Set([
   'discoverableByPhone',
   'discoverableByUsername',
   'showLastSeen',
-  'showOnlineStatus'
+  'showOnlineStatus',
+  'whoCanFindMe',
+  'whoCanMessageMe',
+  'readReceiptsEnabled',
+  'onlineStatusVisibility',
+  'profilePhotoVisibility'
 ] as const);
 
 const findActiveUser = async (
@@ -49,9 +58,12 @@ const mergePrivacySettings = (
   const base: PrivacySettings = { ...DEFAULT_PRIVACY_SETTINGS, ...existing };
   for (const [key, value] of Object.entries(patch)) {
     // Defense in depth: ignore any field that isn't an allowed privacy flag.
-    if (ALLOWED_DISCOVERABILITY_FIELDS.has(key as keyof PrivacySettings)) {
-      (base as unknown as Record<string, boolean>)[key] = Boolean(value);
+    if (!ALLOWED_DISCOVERABILITY_FIELDS.has(key as keyof PrivacySettings)) {
+      continue;
     }
+    // The validator already enforced the per-field type. Cast through unknown
+    // so we don't coerce a string audience (`'contacts'`) to a Boolean.
+    (base as unknown as Record<string, unknown>)[key] = value;
   }
   return base;
 };
@@ -106,22 +118,39 @@ export const updateMe = async (
 };
 
 export const getPublicProfile = async (
-  userId: string
+  userId: string,
+  viewerId?: string
 ): Promise<PublicUserDto> => {
   const user = await findActiveUser({ _id: userId });
   if (!user) throw new NotFoundError('User not found');
-  return toPublicUserDto(user);
+
+  const dto = toPublicUserDto(user);
+
+  // Profile-photo privacy gate. If the viewer is not the subject themselves
+  // and the audience doesn't include them, drop the avatar from the response.
+  // We don't reveal *that* it was hidden — the field is simply absent, which
+  // is also the natural state for accounts without an avatar.
+  if (viewerId && dto.avatarUrl) {
+    const visible = await canSeeProfilePhoto(viewerId, user);
+    if (!visible) delete dto.avatarUrl;
+  }
+
+  return dto;
 };
 
 // Search rules:
 //   - exact match only (no regex / substring) to prevent enumeration
 //   - returns at most one record (email/phone/username are unique)
-//   - honors the target's privacy settings: if the matching field is not
-//     discoverable, behave as if the user does not exist
+//   - honors the target's per-field discoverability setting AND the
+//     audience-scoped `whoCanFindMe` (e.g. `contacts` returns nothing to a
+//     non-contact viewer); failure to pass either gate behaves as "no result"
+//     so a probing client cannot distinguish "user doesn't exist" from
+//     "user opted out of discovery"
 //   - never reveal email/phone/role/status/privacy via the response shape;
 //     always return the public DTO
 export const searchUsers = async (
-  input: SearchUsersInput
+  input: SearchUsersInput,
+  viewerId?: string
 ): Promise<PublicUserDto[]> => {
   let user: UserDocument | null = null;
   let discoverable = false;
@@ -138,6 +167,16 @@ export const searchUsers = async (
   }
 
   if (!user || !discoverable) return [];
+
+  // Audience-scoped privacy gate. The viewer is always allowed to find
+  // themselves; we pass viewerId only when the caller supplied one (e.g.
+  // not-yet-authed flows would short-circuit before this point, but the
+  // function is defensive).
+  if (viewerId) {
+    const allowed = await canDiscoverUser(viewerId, user);
+    if (!allowed) return [];
+  }
+
   return [toPublicUserDto(user)];
 };
 

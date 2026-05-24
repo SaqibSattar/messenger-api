@@ -8,9 +8,12 @@
 // runner cannot rely on that, so we centralize the registration here.
 
 import '../../modules/admin/auditLog.model';
+import '../../modules/contacts/contact.model';
+import '../../modules/contacts/contactRequest.model';
 import '../../modules/conversations/conversation.model';
 import '../../modules/conversations/conversationMember.model';
 import '../../modules/devices/device.model';
+import '../../modules/invites/inviteLink.model';
 import '../../modules/media/attachment.model';
 import '../../modules/messages/message.model';
 import '../../modules/messages/messageReaction.model';
