@@ -48,6 +48,21 @@ export interface MessageExpiredNowEvent {
   reason: 'owner' | 'moderator';
 }
 
+export interface StoryRemovedEvent {
+  storyId: string;
+  authorId: string;
+  removedBy: 'owner' | 'moderator';
+}
+
+export interface StoryReportedEvent {
+  storyId: string;
+  authorId: string;
+  reason: string;
+  // `hasDetails` only — never log the report body itself. The reviewer in the
+  // moderation module sees the full text via the persistent report record.
+  hasDetails: boolean;
+}
+
 const auditEvent = (
   event: string,
   ctx: AuditContext,
@@ -93,4 +108,18 @@ export const auditMessageExpiredNow = (
   event: MessageExpiredNowEvent
 ): void => {
   auditEvent('message.expired_now', ctx, { ...event });
+};
+
+export const auditStoryRemoved = (
+  ctx: AuditContext,
+  event: StoryRemovedEvent
+): void => {
+  auditEvent('story.removed', ctx, { ...event });
+};
+
+export const auditStoryReported = (
+  ctx: AuditContext,
+  event: StoryReportedEvent
+): void => {
+  auditEvent('story.reported', ctx, { ...event });
 };

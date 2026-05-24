@@ -5,6 +5,7 @@ import type {
   MessageReceiptDto
 } from '../modules/messages/message.types';
 import type { DisappearingMessageSettings } from '../modules/conversations/conversation.types';
+import type { StoryDto } from '../modules/stories/story.types';
 
 /**
  * In-process realtime event bus.
@@ -55,6 +56,40 @@ export interface RealtimeMessageExpiredPayload {
   message: MessageDto;
 }
 
+// Story events. Unlike message events, these are author-scoped, not
+// conversation-scoped — the realtime bridge fans them out to each authorized
+// viewer's user room. `viewerIds` is computed by the story service from the
+// audience + block + mute rules and is the authoritative recipient list.
+export interface RealtimeStoryCreatedPayload {
+  authorId: string;
+  // Pre-computed set of users who currently pass the story's audience checks.
+  // The bridge uses this directly so authorization is decided at emit time,
+  // not at fan-out time.
+  viewerIds: string[];
+  story: StoryDto;
+}
+
+export interface RealtimeStoryDeletedPayload {
+  authorId: string;
+  storyId: string;
+  // Same audience set as story.created — clients drop the story from their
+  // local cache regardless of whether they had actually viewed it.
+  viewerIds: string[];
+}
+
+export interface RealtimeStoryExpiredPayload {
+  authorId: string;
+  storyId: string;
+  viewerIds: string[];
+}
+
+export interface RealtimeStoryViewedPayload {
+  authorId: string;
+  storyId: string;
+  viewerId: string;
+  viewedAt: string;
+}
+
 export interface RealtimeEventMap {
   'message.created': RealtimeMessagePayload;
   'message.updated': RealtimeMessagePayload;
@@ -65,6 +100,10 @@ export interface RealtimeEventMap {
   'message.delivered': RealtimeReceiptPayload;
   'message.read': RealtimeReceiptPayload;
   'conversation.disappearing_settings_updated': RealtimeDisappearingSettingsPayload;
+  'story.created': RealtimeStoryCreatedPayload;
+  'story.deleted': RealtimeStoryDeletedPayload;
+  'story.expired': RealtimeStoryExpiredPayload;
+  'story.viewed': RealtimeStoryViewedPayload;
 }
 
 export type RealtimeEventName = keyof RealtimeEventMap;

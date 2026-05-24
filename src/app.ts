@@ -20,6 +20,7 @@ import {
   messageRouter
 } from './modules/messages/message.routes';
 import { mediaRouter } from './modules/media/media.routes';
+import { storyRouter } from './modules/stories/story.routes';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -79,6 +80,7 @@ export const buildApp = (): Express => {
   app.use('/api/v1/conversations', conversationRouter);
   app.use('/api/v1/messages', messageRouter);
   app.use('/api/v1/media', mediaRouter);
+  app.use('/api/v1/stories', storyRouter);
   app.use('/api/v1/admin', adminRouter);
 
   app.use(notFound);
