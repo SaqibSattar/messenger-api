@@ -62,13 +62,11 @@ const storySchema = new Schema<StoryDocument>(
 // (Mongo provides the natural { _id: -1 } cursor on the default _id index.)
 storySchema.index({ authorId: 1, _id: -1 });
 
-// Expiration sweep: stories that have hit their TTL but have not yet been
-// marked deleted. Sparse partial filter keeps already-deleted docs out of
-// the index entirely so the cleanup query stays cheap.
-storySchema.index(
-  { expiresAt: 1 },
-  { partialFilterExpression: { deletedAt: { $exists: false } } }
-);
+// Expiration sweep: stories that have hit their TTL. The cleanup query
+// adds the `deletedAt` filter at the service layer — MongoDB partial
+// filter expressions only support positive existence checks, so we cannot
+// narrow the index to "not deleted" directly.
+storySchema.index({ expiresAt: 1 });
 
 export const toStoryDto = (
   doc: StoryDocument,

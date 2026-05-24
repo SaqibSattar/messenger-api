@@ -9,6 +9,14 @@ const schema = z.object({
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
   BODY_LIMIT: z.string().default('100kb'),
+  // Hard cap on per-request lifetime (ms). 0 disables. Set generously above
+  // the slowest realistic route; long-running work belongs in a job, not on
+  // the request path.
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(0).default(15_000),
+  // Trust proxy hop count when deployed behind a load balancer (e.g. ALB,
+  // nginx, Cloudflare). Without this, rate-limit and audit IPs reflect the
+  // proxy, not the real client. Leave at 0 in single-host development.
+  TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   MONGODB_URI: z.string().min(1).optional(),
   REDIS_URL: z.string().min(1).optional(),
   JWT_ACCESS_SECRET: z.string().min(1).optional(),

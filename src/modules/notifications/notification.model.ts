@@ -78,13 +78,11 @@ const notificationSchema = new Schema<NotificationDocument>(
 // createdAt index.
 notificationSchema.index({ userId: 1, _id: -1 });
 
-// Unread count: sparse partial index that only contains rows where readAt
-// is missing. Keeps the index tiny — a user with 10k read notifications
-// still only carries the unread tail in this index.
-notificationSchema.index(
-  { userId: 1, readAt: 1 },
-  { partialFilterExpression: { readAt: { $exists: false } } }
-);
+// Unread-count support index. We can't restrict the partial filter to
+// "readAt missing" (MongoDB partial expressions don't allow $exists:
+// false), so the index covers all rows and the unread query carries the
+// readAt filter at query time.
+notificationSchema.index({ userId: 1, readAt: 1 });
 
 export const toNotificationDto = (
   doc: NotificationDocument

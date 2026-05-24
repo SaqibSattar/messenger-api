@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { asyncHandler } from './middleware/asyncHandler';
 import { requireAuth } from './middleware/auth';
 import { requirePermission } from './middleware/requirePermission';
+import { requestTimeout } from './middleware/requestTimeout';
 import { ok } from './utils/apiResponse';
 import { isMongoReady } from './db/mongo';
 import { isRedisReady } from './db/redis';
@@ -41,10 +42,36 @@ export const buildApp = (): Express => {
   const app = express();
 
   app.disable('x-powered-by');
+  // Trust only the configured number of proxy hops; trusting an unknown
+  // number of hops lets a client forge X-Forwarded-For and defeat
+  // IP-based rate limiting / audit attribution.
+  if (env.TRUST_PROXY > 0) {
+    app.set('trust proxy', env.TRUST_PROXY);
+  }
 
   app.use(requestId);
   app.use(httpLogger);
-  app.use(helmet());
+  // crossOriginResourcePolicy: 'same-site' lets a web client on the same
+  // site fetch resources (media proxies, etc.); pure API hosts could
+  // tighten this to 'same-origin' if they never share assets.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      // The API itself does not serve HTML; explicit CSP frames any HTML
+      // surfaces (e.g. error pages from misconfigured proxies) as
+      // strictly script-free.
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'none'"],
+          frameAncestors: ["'none'"]
+        }
+      },
+      referrerPolicy: { policy: 'no-referrer' }
+    })
+  );
+  if (env.REQUEST_TIMEOUT_MS > 0) {
+    app.use(requestTimeout(env.REQUEST_TIMEOUT_MS));
+  }
 
   app.use(
     cors({

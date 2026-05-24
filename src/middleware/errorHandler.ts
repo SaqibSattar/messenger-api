@@ -21,6 +21,24 @@ export const errorHandler = (
     return;
   }
 
+  // express.json / express.urlencoded surface "PayloadTooLargeError"
+  // (type === 'entity.too.large') when the request exceeds BODY_LIMIT.
+  // Convert to a stable 413 so the body-limit becomes a real hardening
+  // boundary the client can act on, rather than a generic 500.
+  if (
+    err instanceof Error &&
+    (err as { type?: string }).type === 'entity.too.large'
+  ) {
+    res.status(413).json({
+      success: false,
+      error: {
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'Request body exceeds the configured limit'
+      }
+    });
+    return;
+  }
+
   if (err instanceof ZodError) {
     res.status(400).json({
       success: false,

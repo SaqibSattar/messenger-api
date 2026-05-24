@@ -87,12 +87,12 @@ messageSchema.index(
   { sparse: true }
 );
 
-// Cleanup job query: messages that are scheduled to expire, not yet processed.
-// Sparse keeps non-expiring messages out of the index entirely.
-messageSchema.index(
-  { expiresAt: 1 },
-  { sparse: true, partialFilterExpression: { expiredAt: { $exists: false } } }
-);
+// Cleanup job query: messages that are scheduled to expire. Sparse keeps
+// non-expiring messages out of the index entirely. We cannot narrow further
+// with a partial filter on `expiredAt: { $exists: false }` — MongoDB only
+// allows positive existence checks in partial filter expressions — so the
+// cleanup job adds the `expiredAt` filter at query time.
+messageSchema.index({ expiresAt: 1 }, { sparse: true });
 
 export const toMessageDto = (
   doc: MessageDocument,

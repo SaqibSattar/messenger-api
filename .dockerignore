@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+.claude
+.agents
+.qodo
+README.md
+messenger-nodejs-production-prompts
+AGENTS.md
+CLAUDE.md

@@ -1,0 +1,59 @@
+# Local development compose. NOT a production reference — the API is
+# pinned to a non-root user but Mongo/Redis run with the upstream defaults
+# (no auth, no TLS, ephemeral volumes). Production should use managed
+# services or a hardened compose with auth, persistent volumes, and TLS.
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      CLIENT_ORIGIN: http://localhost:5173
+      MONGODB_URI: mongodb://mongo:27017/messenger
+      REDIS_URL: redis://redis:6379
+      # The compose file MUST NOT carry real secrets. These are throwaway
+      # values for local stack-up smoke checks; rotate before promoting.
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET in your .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET in your .env}
+      STORAGE_PROVIDER: memory
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:?set STORAGE_SIGNING_SECRET in your .env}
+
+volumes:
+  mongo-data:
+  redis-data:
