@@ -1,0 +1,501 @@
+import mongoose, { type FilterQuery, type Types } from 'mongoose';
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError
+} from '../../utils/errors';
+import { emitRealtime } from '../../services/realtimeEvents';
+import {
+  Conversation,
+  type ConversationDocument
+} from '../conversations/conversation.model';
+import { ConversationMember } from '../conversations/conversationMember.model';
+import {
+  CONVERSATION_MEMBER_ROLE,
+  CONVERSATION_TYPE
+} from '../conversations/conversation.types';
+import type { ConversationMemberDocument } from '../conversations/conversationMember.model';
+import {
+  assertConversationMembership,
+  type AuthenticatedActor
+} from '../permissions/authorization';
+import { PERMISSIONS } from '../permissions/permissions.constants';
+import { Message, toMessageDto, type MessageDocument } from './message.model';
+import {
+  MessageReceipt,
+  toMessageReceiptDto
+} from './messageReceipt.model';
+import {
+  MessageReaction,
+  toMessageReactionDto,
+  type MessageReactionDocument
+} from './messageReaction.model';
+import {
+  MESSAGE_DELETION_REASON,
+  MESSAGE_PREVIEW_MAX_LENGTH,
+  type ListMessagesResult,
+  type MessageDto,
+  type MessageReactionDto,
+  type MessageReceiptDto
+} from './message.types';
+import type {
+  AddReactionInput,
+  EditMessageInput,
+  ListMessagesQuery,
+  SendMessageInput
+} from './message.validation';
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+const toObjectId = (id: string): Types.ObjectId => new mongoose.Types.ObjectId(id);
+
+const actorIsModerator = (actor: AuthenticatedActor): boolean =>
+  actor.permissions.includes(PERMISSIONS.MESSAGE_MODERATE);
+
+const findActiveMembership = (
+  conversationId: string,
+  userId: string
+): Promise<ConversationMemberDocument | null> =>
+  ConversationMember.findOne({
+    conversationId: toObjectId(conversationId),
+    userId: toObjectId(userId),
+    leftAt: { $exists: false }
+  });
+
+// Strict membership check used by write paths. Returns the membership when
+// present, otherwise hides the conversation behind a 404 so a non-member
+// cannot probe for its existence. Distinct from `assertConversationMembership`
+// in authorization.ts, which intentionally bypasses for platform moderators —
+// moderators have no business sending messages or reactions to conversations
+// they don't belong to.
+const requireWritingMembership = async (
+  conversationId: string,
+  actor: AuthenticatedActor
+): Promise<ConversationMemberDocument> => {
+  const membership = await findActiveMembership(conversationId, actor.id);
+  if (!membership) throw new NotFoundError('Conversation not found');
+  return membership;
+};
+
+const fetchConversationOr404 = async (
+  conversationId: string
+): Promise<ConversationDocument> => {
+  const conv = await Conversation.findById(conversationId);
+  if (!conv) throw new NotFoundError('Conversation not found');
+  return conv;
+};
+
+const fetchMessageOr404 = async (
+  messageId: string
+): Promise<MessageDocument> => {
+  const msg = await Message.findById(messageId);
+  if (!msg) throw new NotFoundError('Message not found');
+  return msg;
+};
+
+// Block check stub. The blocks collection lands with the moderation module
+// (08-blocking-reporting-moderation.md); until then this returns false. The
+// call site exists so the moderation prompt is a single-file swap.
+const isBlockedBetween = async (
+  _userIdA: string,
+  _userIdB: string
+): Promise<boolean> => {
+  return false;
+};
+
+const isConversationAdmin = (
+  membership: ConversationMemberDocument
+): boolean =>
+  membership.role === CONVERSATION_MEMBER_ROLE.ADMIN ||
+  membership.role === CONVERSATION_MEMBER_ROLE.OWNER;
+
+const buildPreview = (text: string): string => {
+  // Single-line preview, truncated. We never store the raw multi-line body on
+  // the conversation — the full message lives only on its own document.
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  if (oneLine.length <= MESSAGE_PREVIEW_MAX_LENGTH) return oneLine;
+  return oneLine.slice(0, MESSAGE_PREVIEW_MAX_LENGTH - 1).trimEnd() + '…';
+};
+
+const updateConversationLastMessage = async (
+  conversation: ConversationDocument,
+  message: MessageDocument
+): Promise<void> => {
+  // Only advance the preview if this message is newer than the current one.
+  // Older inserts (from a rare reorder / retry) must not overwrite the head.
+  const current = conversation.lastMessage;
+  if (current && current.sentAt > message.createdAt) return;
+
+  conversation.lastMessage = {
+    messageId: message._id as Types.ObjectId,
+    senderId: message.senderId,
+    preview: buildPreview(message.text),
+    sentAt: message.createdAt
+  };
+  await conversation.save();
+};
+
+const findDirectCounterpartyId = async (
+  conversation: ConversationDocument,
+  actorId: string
+): Promise<string | null> => {
+  if (conversation.type !== CONVERSATION_TYPE.DIRECT) return null;
+  const other = await ConversationMember.findOne({
+    conversationId: conversation._id,
+    userId: { $ne: toObjectId(actorId) }
+  });
+  return other ? other.userId.toString() : null;
+};
+
+// ---------------------------------------------------------------------------
+// Send
+// ---------------------------------------------------------------------------
+
+export const sendMessage = async (
+  actor: AuthenticatedActor,
+  conversationId: string,
+  input: SendMessageInput
+): Promise<MessageDto> => {
+  const conv = await fetchConversationOr404(conversationId);
+  const membership = await requireWritingMembership(conversationId, actor);
+
+  // Conversation-level "only admins may post". Plain members hit this even
+  // though they could otherwise send; platform moderators are not exempt —
+  // they have no business posting as a non-admin in a group they joined.
+  if (
+    conv.settings.whoCanSendMessages === 'admins' &&
+    !isConversationAdmin(membership)
+  ) {
+    throw new ForbiddenError('Only conversation admins can post here');
+  }
+
+  // Direct-conversation block rule. The error wording deliberately doesn't
+  // reveal which side initiated the block.
+  const counterpartyId = await findDirectCounterpartyId(conv, actor.id);
+  if (counterpartyId && (await isBlockedBetween(actor.id, counterpartyId))) {
+    throw new ForbiddenError('Cannot send messages to this conversation');
+  }
+
+  if (input.replyToMessageId) {
+    const parent = await Message.findById(input.replyToMessageId);
+    if (!parent) {
+      throw new BadRequestError('Reply target does not exist');
+    }
+    if (parent.conversationId.toString() !== conversationId) {
+      // Cross-conversation replies would leak existence of other messages.
+      throw new BadRequestError(
+        'Reply target must be in the same conversation'
+      );
+    }
+  }
+
+  const msg = await Message.create({
+    conversationId: conv._id,
+    senderId: toObjectId(actor.id),
+    text: input.text ?? '',
+    attachments: [],
+    ...(input.replyToMessageId
+      ? { replyToMessageId: toObjectId(input.replyToMessageId) }
+      : {})
+  });
+
+  await updateConversationLastMessage(conv, msg);
+
+  const dto = toMessageDto(msg);
+  emitRealtime('message.created', {
+    conversationId: dto.conversationId,
+    message: dto
+  });
+  return dto;
+};
+
+// ---------------------------------------------------------------------------
+// List & get
+// ---------------------------------------------------------------------------
+
+export const listMessages = async (
+  actor: AuthenticatedActor,
+  conversationId: string,
+  query: ListMessagesQuery
+): Promise<ListMessagesResult> => {
+  // Read path: members see their conversations; platform moderators may also
+  // read for investigation (mirror of conversation.getConversation).
+  const membership = await findActiveMembership(conversationId, actor.id);
+  assertConversationMembership(membership, actor, conversationId);
+
+  const filter: FilterQuery<MessageDocument> = {
+    conversationId: toObjectId(conversationId)
+  };
+  if (query.cursor) {
+    filter._id = { $lt: toObjectId(query.cursor) };
+  }
+
+  const docs = await Message.find(filter)
+    .sort({ _id: -1 })
+    .limit(query.limit + 1);
+
+  const hasMore = docs.length > query.limit;
+  const page = hasMore ? docs.slice(0, query.limit) : docs;
+
+  const items = page.map(toMessageDto);
+  const nextCursor =
+    hasMore && page.length > 0
+      ? (page[page.length - 1]._id as Types.ObjectId).toString()
+      : null;
+  return { items, nextCursor };
+};
+
+export const getMessage = async (
+  actor: AuthenticatedActor,
+  messageId: string
+): Promise<MessageDto> => {
+  const msg = await fetchMessageOr404(messageId);
+  const conversationId = msg.conversationId.toString();
+  const membership = await findActiveMembership(conversationId, actor.id);
+  assertConversationMembership(membership, actor, conversationId);
+  return toMessageDto(msg);
+};
+
+// ---------------------------------------------------------------------------
+// Edit & delete
+// ---------------------------------------------------------------------------
+
+export const editMessage = async (
+  actor: AuthenticatedActor,
+  messageId: string,
+  input: EditMessageInput
+): Promise<MessageDto> => {
+  const msg = await fetchMessageOr404(messageId);
+
+  // Deleted messages cannot be revived through edit.
+  if (msg.deletedAt) throw new NotFoundError('Message not found');
+
+  const isSender = msg.senderId.toString() === actor.id;
+  const isMod = actorIsModerator(actor);
+  if (!isSender && !isMod) {
+    throw new ForbiddenError('You cannot edit this message');
+  }
+  if (isSender && !actor.permissions.includes(PERMISSIONS.MESSAGE_EDIT_OWN)) {
+    throw new ForbiddenError('You cannot edit this message');
+  }
+
+  // Sender (or mod) must still have access to the conversation. A user who
+  // was removed from the group cannot keep editing their old posts.
+  const conversationId = msg.conversationId.toString();
+  const membership = await findActiveMembership(conversationId, actor.id);
+  if (!isMod) {
+    if (!membership) throw new NotFoundError('Message not found');
+  }
+
+  msg.text = input.text;
+  msg.editedAt = new Date();
+  await msg.save();
+
+  const dto = toMessageDto(msg);
+  emitRealtime('message.updated', {
+    conversationId: dto.conversationId,
+    message: dto
+  });
+  return dto;
+};
+
+export const deleteMessage = async (
+  actor: AuthenticatedActor,
+  messageId: string
+): Promise<MessageDto> => {
+  const msg = await fetchMessageOr404(messageId);
+  if (msg.deletedAt) {
+    // Idempotent: return the masked DTO without re-emitting events.
+    return toMessageDto(msg);
+  }
+
+  const isSender = msg.senderId.toString() === actor.id;
+  const isMod = actorIsModerator(actor);
+
+  if (isSender) {
+    if (!actor.permissions.includes(PERMISSIONS.MESSAGE_DELETE_OWN)) {
+      throw new ForbiddenError('You cannot delete this message');
+    }
+  } else if (!isMod) {
+    throw new ForbiddenError('You cannot delete this message');
+  }
+
+  msg.deletedAt = new Date();
+  msg.deletedBy = toObjectId(actor.id);
+  msg.deletionReason = isMod && !isSender
+    ? MESSAGE_DELETION_REASON.MODERATOR_DELETED
+    : MESSAGE_DELETION_REASON.USER_DELETED;
+  await msg.save();
+
+  const dto = toMessageDto(msg);
+  emitRealtime('message.deleted', {
+    conversationId: dto.conversationId,
+    message: dto
+  });
+  return dto;
+};
+
+// ---------------------------------------------------------------------------
+// Reactions
+// ---------------------------------------------------------------------------
+
+export const addReaction = async (
+  actor: AuthenticatedActor,
+  messageId: string,
+  input: AddReactionInput
+): Promise<MessageReactionDto> => {
+  const msg = await fetchMessageOr404(messageId);
+  if (msg.deletedAt) throw new NotFoundError('Message not found');
+
+  const conversationId = msg.conversationId.toString();
+  await requireWritingMembership(conversationId, actor);
+
+  if (!actor.permissions.includes(PERMISSIONS.MESSAGE_CREATE)) {
+    throw new ForbiddenError('You cannot react to messages');
+  }
+
+  try {
+    const reaction = await MessageReaction.create({
+      messageId: msg._id,
+      conversationId: msg.conversationId,
+      userId: toObjectId(actor.id),
+      emoji: input.emoji
+    });
+    const dto = toMessageReactionDto(reaction);
+    emitRealtime('message.reaction_added', {
+      conversationId,
+      messageId: dto.messageId,
+      reaction: dto
+    });
+    return dto;
+  } catch (err) {
+    if (
+      err instanceof mongoose.mongo.MongoServerError &&
+      err.code === 11000
+    ) {
+      // Same user re-sending the same emoji: surface the existing reaction
+      // rather than 409. Clients can treat both as success.
+      const existing = await MessageReaction.findOne({
+        messageId: msg._id,
+        userId: toObjectId(actor.id),
+        emoji: input.emoji
+      });
+      if (existing) return toMessageReactionDto(existing);
+      throw new ConflictError('Reaction could not be saved');
+    }
+    throw err;
+  }
+};
+
+export const removeReaction = async (
+  actor: AuthenticatedActor,
+  messageId: string,
+  reactionId: string
+): Promise<void> => {
+  const reaction: MessageReactionDocument | null =
+    await MessageReaction.findById(reactionId);
+  if (!reaction) throw new NotFoundError('Reaction not found');
+  if (reaction.messageId.toString() !== messageId) {
+    // Route param mismatch — don't leak that the reaction exists elsewhere.
+    throw new NotFoundError('Reaction not found');
+  }
+
+  const conversationId = reaction.conversationId.toString();
+  const isOwner = reaction.userId.toString() === actor.id;
+  const isMod = actorIsModerator(actor);
+
+  if (!isOwner && !isMod) {
+    throw new ForbiddenError('You cannot remove this reaction');
+  }
+  // Non-moderator removals must still be from an active member. A mod can
+  // clean up after a removed user.
+  if (!isMod) {
+    await requireWritingMembership(conversationId, actor);
+  }
+
+  await MessageReaction.deleteOne({ _id: reaction._id });
+
+  emitRealtime('message.reaction_removed', {
+    conversationId,
+    messageId: reaction.messageId.toString(),
+    reactionId: (reaction._id as Types.ObjectId).toString(),
+    userId: reaction.userId.toString()
+  });
+};
+
+// ---------------------------------------------------------------------------
+// Receipts
+// ---------------------------------------------------------------------------
+
+type ReceiptKind = 'delivered' | 'read';
+
+const upsertReceipt = async (
+  actor: AuthenticatedActor,
+  messageId: string,
+  kind: ReceiptKind
+): Promise<MessageReceiptDto> => {
+  const msg = await fetchMessageOr404(messageId);
+
+  // You cannot ack your own message. Lets us treat "all participants have a
+  // receipt" as a clean signal for unread counts in later prompts.
+  if (msg.senderId.toString() === actor.id) {
+    throw new BadRequestError('Cannot mark your own message');
+  }
+
+  const conversationId = msg.conversationId.toString();
+  // Membership is required for receipts, including for moderators — a
+  // receipt is an active-presence signal, not a moderation action.
+  const membership = await findActiveMembership(conversationId, actor.id);
+  if (!membership) throw new NotFoundError('Message not found');
+
+  const now = new Date();
+
+  // deliveredAt stays the *first* confirmed-receipt time, so we only set it
+  // on insert. readAt is always bumped to the most recent read. For a "read"
+  // event that arrives without a prior "delivered", $setOnInsert seeds
+  // deliveredAt = now so the timeline stays consistent.
+  //
+  // $set and $setOnInsert MUST NOT target the same field path — MongoDB
+  // rejects the operation with a conflict otherwise.
+  const update: Record<string, Record<string, unknown>> = {
+    $setOnInsert: {
+      messageId: msg._id,
+      conversationId: msg.conversationId,
+      userId: toObjectId(actor.id),
+      deliveredAt: now
+    }
+  };
+  if (kind === 'read') {
+    update.$set = { readAt: now };
+  }
+
+  const receipt = await MessageReceipt.findOneAndUpdate(
+    {
+      messageId: msg._id,
+      userId: toObjectId(actor.id)
+    },
+    update,
+    { new: true, upsert: true }
+  );
+
+  const dto = toMessageReceiptDto(receipt);
+  emitRealtime(kind === 'read' ? 'message.read' : 'message.delivered', {
+    conversationId,
+    messageId: dto.messageId,
+    receipt: dto
+  });
+  return dto;
+};
+
+export const markDelivered = (
+  actor: AuthenticatedActor,
+  messageId: string
+): Promise<MessageReceiptDto> => upsertReceipt(actor, messageId, 'delivered');
+
+export const markRead = (
+  actor: AuthenticatedActor,
+  messageId: string
+): Promise<MessageReceiptDto> => upsertReceipt(actor, messageId, 'read');

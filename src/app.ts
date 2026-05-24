@@ -15,6 +15,10 @@ import { authRouter } from './modules/auth/auth.routes';
 import { adminRouter } from './modules/admin/admin.routes';
 import { userRouter } from './modules/users/user.routes';
 import { conversationRouter } from './modules/conversations/conversation.routes';
+import {
+  conversationMessagesRouter,
+  messageRouter
+} from './modules/messages/message.routes';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -67,7 +71,12 @@ export const buildApp = (): Express => {
 
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/users', userRouter);
+  app.use(
+    '/api/v1/conversations/:conversationId/messages',
+    conversationMessagesRouter
+  );
   app.use('/api/v1/conversations', conversationRouter);
+  app.use('/api/v1/messages', messageRouter);
   app.use('/api/v1/admin', adminRouter);
 
   app.use(notFound);
