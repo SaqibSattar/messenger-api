@@ -1,0 +1,2428 @@
+openapi: 3.0.3
+
+info:
+  title: messenger-api
+  version: 0.1.0
+  description: |
+    Production messenger backend. This OpenAPI document is generated and
+    maintained alongside the canonical contract docs in [REST.md](./REST.md),
+    [SOCKETS.md](./SOCKETS.md), [ERROR_CODES.md](./ERROR_CODES.md), and
+    [VERSIONING.md](./VERSIONING.md). See [`docs/api/README.md`](./README.md)
+    for shared conventions and [`AGENTS.md`](../../AGENTS.md) for the
+    engineering rules behind every choice here.
+
+    Realtime (Socket.IO) is intentionally **not** part of this OpenAPI
+    document — OpenAPI does not model bidirectional event streams. The
+    socket surface is documented in [SOCKETS.md](./SOCKETS.md).
+
+  contact:
+    name: messenger-api maintainers
+    url: https://github.com/SaqibSattar/messenger-api
+  license:
+    name: Proprietary
+
+servers:
+  - url: http://localhost:3000
+    description: Local dev (npm run dev)
+  - url: https://{host}
+    description: Production
+    variables:
+      host:
+        default: api.example.com
+
+tags:
+  - name: Operations
+    description: Liveness, readiness, and admin-gated metrics. Unversioned.
+  - name: Auth
+    description: Account creation, login, refresh, logout, password lifecycle.
+  - name: Users
+    description: Self-profile, account lifecycle, data export, public lookup, user search.
+  - name: Conversations
+    description: Direct and group conversations and their members.
+  - name: Messages
+    description: Send, list, edit, delete, react, mark-delivered/read, expire-now.
+  - name: Media
+    description: Signed upload / signed download / metadata for attachments.
+  - name: Stories
+    description: 24h-ephemeral story posts, views, mutes, reports.
+  - name: Contacts
+    description: Contact requests and the accepted-contacts list.
+  - name: Invites
+    description: Group join links — create, list, redeem, revoke.
+  - name: Notifications
+    description: In-app notifications + global and per-conversation preferences.
+  - name: Devices
+    description: Push-notification device registration.
+  - name: Blocks
+    description: Per-user blocks.
+  - name: Reports
+    description: User-submitted reports and moderator review.
+  - name: Moderation
+    description: Moderator actions (warn / delete / suspend).
+  - name: Search
+    description: Conversation, message, and user search.
+  - name: Privacy
+    description: Per-user privacy controls (discovery, DM gating, presence, receipts).
+  - name: Admin
+    description: Role / permission management, audit log, system summary.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Liveness probe
+      description: |
+        Returns 200 as soon as the process is up. Does not exercise any
+        dependency. Use for orchestrator liveness checks; use `/ready` for
+        readiness.
+      security: []
+      responses:
+        '200':
+          description: Process is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Success'
+              example:
+                success: true
+                data: { status: up, uptime: 12.345 }
+
+  /ready:
+    get:
+      tags: [Operations]
+      summary: Readiness probe
+      description: |
+        200 only when **both** Mongo and Redis are reachable. 503 otherwise.
+        Object storage is intentionally not part of `/ready`; storage
+        outages degrade the attachment path only and are documented in
+        [BACKUP_RESTORE_DR.md](../BACKUP_RESTORE_DR.md#object-storage-outage).
+      security: []
+      responses:
+        '200':
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+              example:
+                success: true
+                data: { checks: { mongo: true, redis: true } }
+        '503':
+          description: Not ready. Body has the per-dependency check result.
+
+  /metrics:
+    get:
+      tags: [Operations]
+      summary: Process + collection counters
+      description: |
+        Privacy-safe operational counters only — process stats and
+        collection sizes, never user-identifying data. Behind admin auth
+        so a public scrape cannot harvest dependency information.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Metrics snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Create an account
+      description: |
+        Public. Rate-limited to 10/hour per IP. Either `email` **or**
+        `phone` is required. Duplicate registration returns
+        `409 CONFLICT` with a generic message — the server never reveals
+        which identifier was taken (anti-enumeration, per `AGENTS.md`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Account created. Returns the user and an initial token pair.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokensEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Exchange credentials for tokens
+      description: |
+        Public. Rate-limited to 20 / 15 minutes per IP. Wrong password and
+        unknown user return the **same** `401 UNAUTHORIZED` shape — login
+        intentionally does not reveal which side failed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Login succeeded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokensEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token
+      description: |
+        Rotates the supplied refresh token. The old refresh token is marked
+        revoked atomically with the issuance of the new one; **reuse of a
+        rotated refresh token revokes the entire session chain** (refresh
+        token reuse is a tampering signal).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: Fresh access + refresh tokens.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthTokensEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke one refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/logout-all:
+    post:
+      tags: [Auth]
+      summary: Revoke every session for the current user
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change password
+      description: |
+        Requires the current password. Revokes every other session — the
+        caller stays signed in on the device that performed the change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string, format: password }
+                newPassword: { type: string, format: password }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset
+      description: |
+        Public. Always returns 200 regardless of whether the identifier
+        exists — never leaks account existence. Rate-limited to 5/hour.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                phone: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Consume a password reset token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, newPassword]
+              properties:
+                token: { type: string }
+                newPassword: { type: string, format: password }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user (from access token)
+      responses:
+        '200':
+          description: Public user view.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/users/me:
+    get:
+      tags: [Users]
+      summary: Current user profile
+      responses:
+        '200':
+          description: Caller's full profile (private fields included).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Users]
+      summary: Update own profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName: { type: string, maxLength: 100 }
+                bio: { type: string, maxLength: 500 }
+                avatarUrl: { type: string, format: uri }
+                username: { type: string }
+      responses:
+        '200':
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/users/me/deactivate:
+    post:
+      tags: [Users]
+      summary: Soft-deactivate the account
+      description: |
+        Password-confirmed. Revokes every active session immediately.
+        Reversible only by an operator. Rate-limited to 5/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/users/me/delete-request:
+    post:
+      tags: [Users]
+      summary: Schedule account deletion
+      description: |
+        Password-confirmed. Schedules irreversible deletion 30 days out
+        (`ACCOUNT_DELETION_GRACE_DAYS`). Revokes every active session
+        and soft-revokes every push device immediately. See
+        [PRIVACY_RETENTION.md](../PRIVACY_RETENTION.md) for the full
+        lifecycle. Rate-limited to 5/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Deletion scheduled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeleteRequestEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/users/me/delete-cancel:
+    post:
+      tags: [Users]
+      summary: Cancel a pending deletion
+      description: |
+        Refused (409 CONFLICT) once the scheduled timestamp has passed —
+        finalization may already have started. Rate-limited to 10/hour.
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/users/me/data-export:
+    get:
+      tags: [Users]
+      summary: JSON data export
+      description: |
+        Returns the caller's data envelope (schema version 1). Excludes
+        password hashes, refresh-token hashes, and other users' messages.
+        Capped at 50,000 authored messages. Rate-limited to 3/hour.
+      responses:
+        '200':
+          description: Data export envelope.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/users/search:
+    get:
+      tags: [Users]
+      summary: Search users by display name / username
+      description: |
+        Honors each candidate's `privacySettings.whoCanFindMe`. Min query
+        length is enforced server-side. Rate-limited to 30 / 60s.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        '200':
+          description: Matching users (public view).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/users/{userId}/public:
+    get:
+      tags: [Users]
+      summary: Public profile view
+      description: |
+        Returns the public fields only (no email, phone, role, status,
+        privacy settings). Honors `profilePhotoVisibility`.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: Public user view.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/direct:
+    post:
+      tags: [Conversations]
+      summary: Create or fetch a direct conversation with a peer
+      description: |
+        Idempotent on the unique `(userA, userB)` pair — repeated calls
+        return the existing conversation rather than creating duplicates.
+        Requires `conversation:create`. Honors the peer's
+        `whoCanMessageMe` setting. Rate-limited to 60/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [peerUserId]
+              properties:
+                peerUserId: { type: string }
+      responses:
+        '200':
+          description: The direct conversation (created or pre-existing).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/conversations/groups:
+    post:
+      tags: [Conversations]
+      summary: Create a group conversation
+      description: |
+        Requires `conversation:create`. Initial members are added in the
+        same transaction; the caller becomes `owner`. Rate-limited to
+        30/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, memberUserIds]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 100 }
+                memberUserIds:
+                  type: array
+                  items: { type: string }
+                  maxItems: 250
+      responses:
+        '201':
+          description: Group created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/conversations:
+    get:
+      tags: [Conversations]
+      summary: List my conversations
+      description: Cursor-paginated, most-recent-first.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Conversations the caller is a member of.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConversationPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/conversations/{conversationId}:
+    get:
+      tags: [Conversations]
+      summary: Fetch one conversation
+      description: |
+        Non-members see `404 NOT_FOUND` rather than `403 FORBIDDEN` — the
+        existence of private conversations is not enumerable.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Conversation detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Conversations]
+      summary: Update group settings
+      description: Requires `conversation:manage_settings`.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, minLength: 1, maxLength: 100 }
+                topic: { type: string, maxLength: 500 }
+                avatarUrl: { type: string, format: uri }
+      responses:
+        '200':
+          description: Updated conversation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/members:
+    post:
+      tags: [Conversations]
+      summary: Add members
+      description: Requires `conversation:manage_members`.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userIds]
+              properties:
+                userIds:
+                  type: array
+                  items: { type: string }
+                  minItems: 1
+                  maxItems: 100
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/members/{userId}:
+    delete:
+      tags: [Conversations]
+      summary: Remove a member
+      description: Requires `conversation:manage_members`.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/members/{userId}/role:
+    patch:
+      tags: [Conversations]
+      summary: Change a member's role
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [owner, admin, moderator, member]
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/leave:
+    post:
+      tags: [Conversations]
+      summary: Leave a group conversation
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/read:
+    patch:
+      tags: [Conversations]
+      summary: Move my last-read pointer
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lastReadMessageId]
+              properties:
+                lastReadMessageId: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/preferences:
+    patch:
+      tags: [Conversations]
+      summary: Update my per-conversation preferences
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mutedUntil:
+                  type: string
+                  format: date-time
+                  nullable: true
+                archived: { type: boolean }
+                pinned: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/disappearing-messages:
+    patch:
+      tags: [Conversations]
+      summary: Update disappearing-message settings
+      description: |
+        Requires `message:disappearing:manage_group`. `policy` is fixed at
+        `send_time` — a message inherits the conversation's current TTL at
+        send time and is redacted by the `expireMessages` job. Rate-limited
+        to 30 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+                ttlSeconds: { type: integer, minimum: 60, maximum: 31536000 }
+                policy: { type: string, enum: [send_time] }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/conversations/{conversationId}/messages:
+    post:
+      tags: [Messages]
+      summary: Send a message
+      description: |
+        Requires `message:create` **and** active membership. Honors block
+        relationships in both directions (a block prevents send). Optional
+        attachments must already be `complete` (see `/media/complete`).
+        Rate-limited to 120 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SendMessageRequest' }
+      responses:
+        '201':
+          description: Message created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Messages]
+      summary: List messages in a conversation
+      description: Cursor-paginated, newest-first.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Messages page.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Success'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/MessagePage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/messages/{messageId}:
+    get:
+      tags: [Messages]
+      summary: Fetch one message
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200':
+          description: Message detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Messages]
+      summary: Edit own message
+      description: |
+        Requires `message:edit_own` for own messages, or
+        `message:moderate` for any. Tombstones (edited messages keep
+        prior versions visible only via audit).
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 8000 }
+      responses:
+        '200':
+          description: Updated message.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Messages]
+      summary: Delete own message
+      description: |
+        Soft-delete (sets `deletedAt`). Requires `message:delete_own` or
+        `message:moderate`.
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/messages/{messageId}/reactions:
+    post:
+      tags: [Messages]
+      summary: Add a reaction
+      description: Rate-limited to 180 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string, minLength: 1, maxLength: 16 }
+      responses:
+        '201': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/messages/{messageId}/reactions/{reactionId}:
+    delete:
+      tags: [Messages]
+      summary: Remove own reaction
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+        - name: reactionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/messages/{messageId}/delivered:
+    post:
+      tags: [Messages]
+      summary: Mark delivered
+      description: |
+        Recorded on `message_receipts`. Refused for the sender of the
+        message (you cannot "deliver" your own message to yourself).
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/messages/{messageId}/read:
+    post:
+      tags: [Messages]
+      summary: Mark read
+      description: |
+        Honors the caller's `readReceiptsEnabled` setting — if disabled,
+        the read pointer moves but no receipt row is written.
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/messages/{messageId}/expire-now:
+    post:
+      tags: [Messages]
+      summary: Force-expire a disappearing message
+      description: |
+        Requires `message:disappearing:manage_own`. Only allowed on your
+        own messages. Rate-limited to 30 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/MessageId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/media/upload-url:
+    post:
+      tags: [Media]
+      summary: Request a signed upload URL
+      description: |
+        Requires `media:create`. Returns an `attachmentId` plus the
+        signed URL the client should `PUT` the bytes to. The actual
+        bytes never traverse the API — they go direct to storage. The
+        flow is: this endpoint → `PUT` to storage → `/media/complete`.
+        Rate-limited to 60 / 60s.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadUrlRequest' }
+      responses:
+        '201':
+          description: Signed URL + attachmentId.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadUrlEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/media/complete:
+    post:
+      tags: [Media]
+      summary: Finalize an upload
+      description: |
+        Confirms the bytes are in storage and the attachment is ready to
+        be referenced from a message. Rate-limited to 120 / 60s.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attachmentId]
+              properties:
+                attachmentId: { type: string }
+      responses:
+        '200':
+          description: Attachment finalized.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttachmentEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/media/{attachmentId}:
+    get:
+      tags: [Media]
+      summary: Get a signed download URL
+      description: |
+        Requires `media:read` **and** access to a conversation that
+        contains the attachment. Signed-URL TTL is bounded by
+        `MEDIA_DOWNLOAD_URL_TTL_SECONDS` (default 300s).
+      parameters:
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Signed download URL + metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttachmentDownloadEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Media]
+      summary: Delete an attachment you own
+      parameters:
+        - name: attachmentId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/stories:
+    post:
+      tags: [Stories]
+      summary: Post a story
+      description: Requires `story:create`. Rate-limited to 60/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string, maxLength: 500 }
+                attachmentId: { type: string }
+                audience:
+                  type: string
+                  enum: [everyone, contacts]
+      responses:
+        '201':
+          description: Story created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoryEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Stories]
+      summary: List visible stories
+      responses:
+        '200':
+          description: Stories visible to the caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/stories/mutes:
+    post:
+      tags: [Stories]
+      summary: Mute an author's stories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/stories/mutes/{userId}:
+    delete:
+      tags: [Stories]
+      summary: Unmute an author
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/stories/{storyId}:
+    get:
+      tags: [Stories]
+      summary: Fetch one story
+      parameters:
+        - $ref: '#/components/parameters/StoryId'
+      responses:
+        '200':
+          description: Story detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoryEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Stories]
+      summary: Delete own story
+      parameters:
+        - $ref: '#/components/parameters/StoryId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/stories/{storyId}/view:
+    post:
+      tags: [Stories]
+      summary: Record a view
+      description: Rate-limited to 180 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/StoryId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/stories/{storyId}/viewers:
+    get:
+      tags: [Stories]
+      summary: List viewers (author only)
+      parameters:
+        - $ref: '#/components/parameters/StoryId'
+      responses:
+        '200':
+          description: Viewers list.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/stories/{storyId}/report:
+    post:
+      tags: [Stories]
+      summary: Report a story
+      description: Rate-limited to 20/hour.
+      parameters:
+        - $ref: '#/components/parameters/StoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/contacts/requests:
+    post:
+      tags: [Contacts]
+      summary: Send a contact request
+      description: |
+        Requires `contact:create`. Honored against block relationships,
+        privacy-`whoCanFindMe`, and duplicate-request guard. Rate-limited
+        to 30/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetUserId]
+              properties:
+                targetUserId: { type: string }
+                note: { type: string, maxLength: 240 }
+      responses:
+        '201':
+          description: Request created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/contacts/requests/incoming:
+    get:
+      tags: [Contacts]
+      summary: Incoming contact requests
+      responses:
+        '200':
+          description: Incoming requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/contacts/requests/outgoing:
+    get:
+      tags: [Contacts]
+      summary: Outgoing contact requests
+      responses:
+        '200':
+          description: Outgoing requests.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/contacts/requests/{requestId}/accept:
+    post:
+      tags: [Contacts]
+      summary: Accept incoming request
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/contacts/requests/{requestId}/decline:
+    post:
+      tags: [Contacts]
+      summary: Decline incoming request
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/contacts/requests/{requestId}:
+    delete:
+      tags: [Contacts]
+      summary: Cancel outgoing request
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/contacts:
+    get:
+      tags: [Contacts]
+      summary: List accepted contacts
+      responses:
+        '200':
+          description: Accepted contacts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/contacts/{userId}:
+    delete:
+      tags: [Contacts]
+      summary: Remove an accepted contact
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/conversations/{conversationId}/invites:
+    post:
+      tags: [Invites]
+      summary: Create a join link
+      description: |
+        Requires `invite:create` for the conversation. Token is stored
+        hashed; only the original token redeems. Rate-limited to 60/hour.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expiresAt: { type: string, format: date-time }
+                maxUses: { type: integer, minimum: 1, maximum: 10000 }
+      responses:
+        '201':
+          description: Invite created — raw token returned **once**.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InviteCreatedEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Invites]
+      summary: List active invite links for a conversation
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Active invites for this conversation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/invites/{token}/join:
+    post:
+      tags: [Invites]
+      summary: Join via invite token
+      description: |
+        Requires `invite:redeem`. Revoked, expired, and over-`maxUses`
+        invites return `404 NOT_FOUND` so existence cannot be probed.
+        Rate-limited to 30 / 5 min.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Joined the conversation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/invites/{inviteId}:
+    delete:
+      tags: [Invites]
+      summary: Revoke an invite link
+      parameters:
+        - name: inviteId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/notifications:
+    get:
+      tags: [Notifications]
+      summary: List my notifications
+      description: Cursor-paginated. Requires `notification:read_own`.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Notifications page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/notifications/{id}/unread:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification unread
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Bulk mark all as read
+      description: Rate-limited to 30 / 60s.
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/notification-preferences:
+    get:
+      tags: [Notifications]
+      summary: Read global notification preferences
+      responses:
+        '200':
+          description: Preferences.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Notifications]
+      summary: Update global notification preferences
+      description: Rate-limited to 60 / 60s.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pushEnabled: { type: boolean }
+                emailEnabled: { type: boolean }
+                inAppEnabled: { type: boolean }
+                muteUntil:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/conversations/{conversationId}/notification-preferences:
+    get:
+      tags: [Notifications]
+      summary: Read per-conversation notification override
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: Per-conversation override.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Notifications]
+      summary: Update per-conversation notification override
+      description: Rate-limited to 60 / 60s.
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pushEnabled: { type: boolean }
+                muteUntil:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/devices:
+    post:
+      tags: [Devices]
+      summary: Register a push device
+      description: |
+        Requires `device:manage_own`. Push tokens are stored hashed —
+        clients must re-register on rotation. Rate-limited to 30/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, token]
+              properties:
+                platform:
+                  type: string
+                  enum: [ios, android, web]
+                token: { type: string }
+                label: { type: string, maxLength: 80 }
+      responses:
+        '201':
+          description: Device registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Devices]
+      summary: List my devices
+      responses:
+        '200':
+          description: Devices.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/devices/{deviceId}:
+    patch:
+      tags: [Devices]
+      summary: Update device label / mute state
+      description: Rate-limited to 60/hour.
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+                muted: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    delete:
+      tags: [Devices]
+      summary: Remove a device
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/blocks:
+    post:
+      tags: [Blocks]
+      summary: Block a user
+      description: Rate-limited to 60/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              properties:
+                userId: { type: string }
+                reason: { type: string, maxLength: 240 }
+      responses:
+        '201': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Blocks]
+      summary: List my blocked users
+      responses:
+        '200':
+          description: Blocked users.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/blocks/{blockedUserId}:
+    delete:
+      tags: [Blocks]
+      summary: Unblock a user
+      parameters:
+        - name: blockedUserId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/reports:
+    post:
+      tags: [Reports]
+      summary: Create a report
+      description: Requires `report:create`. Rate-limited to 20/hour.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportRequest' }
+      responses:
+        '201':
+          description: Report created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    get:
+      tags: [Reports]
+      summary: List reports (own, or all if `report:review`)
+      responses:
+        '200':
+          description: Reports.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/reports/{reportId}:
+    get:
+      tags: [Reports]
+      summary: Fetch one report
+      description: Author or `report:review` only.
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Report detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/reports/{reportId}/status:
+    patch:
+      tags: [Reports]
+      summary: Approve / reject / dismiss a report
+      description: Requires `report:review`.
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [approved, rejected, dismissed]
+                notes: { type: string, maxLength: 1000 }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/moderation/actions:
+    post:
+      tags: [Moderation]
+      summary: Apply a moderation action
+      description: Requires `moderation:action`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action, targetType, targetId]
+              properties:
+                action:
+                  type: string
+                  enum: [warn, delete, suspend]
+                targetType:
+                  type: string
+                  enum: [user, message, story]
+                targetId: { type: string }
+                reason: { type: string, maxLength: 1000 }
+                durationDays: { type: integer, minimum: 1, maximum: 365 }
+      responses:
+        '201':
+          description: Action recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Moderation]
+      summary: List moderation actions
+      description: Requires `moderation:action`.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Recent moderation actions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/search/conversations:
+    get:
+      tags: [Search]
+      summary: Search my conversations
+      description: Rate-limited to 60 / 60s.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Matching conversations.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/search/messages:
+    get:
+      tags: [Search]
+      summary: Search my messages
+      description: Rate-limited to 60 / 60s.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Matching messages.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/search/users:
+    get:
+      tags: [Search]
+      summary: Search users
+      description: Honors `whoCanFindMe`. Rate-limited to 60 / 60s.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Matching users.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/privacy-settings:
+    get:
+      tags: [Privacy]
+      summary: Read my privacy settings
+      responses:
+        '200':
+          description: Privacy settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacySettingsEnvelope' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Privacy]
+      summary: Update my privacy settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrivacySettings' }
+      responses:
+        '200':
+          description: Updated privacy settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrivacySettingsEnvelope' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/admin/users/{userId}/role:
+    patch:
+      tags: [Admin]
+      summary: Promote / demote a user
+      description: Requires `admin:users:manage`.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [member, moderator, admin, super-admin]
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/admin/users/{userId}/permissions:
+    patch:
+      tags: [Admin]
+      summary: Adjust custom permissions on a user
+      description: Requires `admin:users:manage`.
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permissions]
+              properties:
+                permissions:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/GenericSuccess' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/admin/audit-logs:
+    get:
+      tags: [Admin]
+      summary: Browse the audit log
+      description: Cursor-paginated. Requires `admin:audit:read`.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit log page.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/admin/system-summary:
+    get:
+      tags: [Admin]
+      summary: System counters and process stats
+      description: Privacy-safe counters only. Requires `admin:system:read`.
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Success' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Short-lived JWT issued by `POST /api/v1/auth/login` (or
+        `/register`). Refresh via `POST /api/v1/auth/refresh`. Refresh
+        tokens are opaque and stored hashed server-side.
+
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-f0-9]{24}$' }
+      description: MongoDB ObjectId (24 hex chars).
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-f0-9]{24}$' }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-f0-9]{24}$' }
+    StoryId:
+      name: storyId
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[a-f0-9]{24}$' }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Opaque pagination cursor returned by the previous page.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+      description: Page size. Clamped per-endpoint; do not assume the default.
+
+  responses:
+    GenericSuccess:
+      description: Operation succeeded.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Success' }
+          example: { success: true, data: null }
+    ValidationError:
+      description: Validation failed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: Invalid request
+              details:
+                formErrors: []
+                fieldErrors:
+                  email: [Invalid email]
+    Unauthorized:
+      description: Missing, expired, or invalid access token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error: { code: UNAUTHORIZED, message: Unauthorized }
+    Forbidden:
+      description: Authenticated but lacks the required permission.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error: { code: FORBIDDEN, message: Forbidden }
+    NotFound:
+      description: Resource missing — or hidden from the caller for privacy.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error: { code: NOT_FOUND, message: Not found }
+    Conflict:
+      description: Uniqueness or state conflict.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error: { code: CONFLICT, message: Conflict }
+    RateLimited:
+      description: Per-route or per-IP rate limit tripped. Inspect `Retry-After`.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            success: false
+            error: { code: RATE_LIMITED, message: Too many requests }
+
+  schemas:
+    Success:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, enum: [true] }
+        data: {}
+        message: { type: string }
+
+    Error:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable error code. See [ERROR_CODES.md](./ERROR_CODES.md).
+              enum:
+                - VALIDATION_ERROR
+                - BAD_REQUEST
+                - INVALID_JSON
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - NOT_FOUND
+                - CONFLICT
+                - PAYLOAD_TOO_LARGE
+                - RATE_LIMITED
+                - INTERNAL_ERROR
+                - INTERNAL
+            message: { type: string }
+            details: { description: Optional structured context (e.g. flattened Zod errors). }
+
+    Page:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { type: object }
+        nextCursor:
+          type: string
+          nullable: true
+
+    User:
+      type: object
+      required: [id, displayName, role]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+        username: { type: string, nullable: true }
+        displayName: { type: string }
+        avatarUrl: { type: string, format: uri, nullable: true }
+        bio: { type: string, nullable: true }
+        role:
+          type: string
+          enum: [member, moderator, admin, super-admin]
+        status:
+          type: string
+          enum: [active, suspended, deactivated, pending_deletion, deleted]
+        privacySettings: { $ref: '#/components/schemas/PrivacySettings' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    UserEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [user]
+              properties:
+                user: { $ref: '#/components/schemas/User' }
+
+    AuthTokens:
+      type: object
+      required: [accessToken, refreshToken, accessTokenExpiresIn, refreshTokenExpiresIn]
+      properties:
+        accessToken: { type: string }
+        accessTokenExpiresIn: { type: integer }
+        refreshToken: { type: string }
+        refreshTokenExpiresIn: { type: integer }
+
+    AuthTokensEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [user, tokens]
+              properties:
+                user: { $ref: '#/components/schemas/User' }
+                tokens: { $ref: '#/components/schemas/AuthTokens' }
+
+    RegisterRequest:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        phone: { type: string }
+        password: { type: string, format: password, minLength: 8 }
+        displayName: { type: string, minLength: 1, maxLength: 100 }
+      required: [password, displayName]
+
+    LoginRequest:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        phone: { type: string }
+        password: { type: string, format: password }
+      required: [password]
+
+    DeleteRequestEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user: { $ref: '#/components/schemas/User' }
+                deletion:
+                  type: object
+                  properties:
+                    deletionRequested: { type: boolean }
+                    requestedAt: { type: string, format: date-time }
+                    scheduledFor: { type: string, format: date-time }
+                    graceDaysRemaining: { type: integer }
+                    state:
+                      type: string
+                      enum: [pending, finalized, cancelled]
+
+    Conversation:
+      type: object
+      required: [id, type, createdBy, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [direct, group]
+        title: { type: string, nullable: true }
+        topic: { type: string, nullable: true }
+        avatarUrl: { type: string, format: uri, nullable: true }
+        createdBy: { type: string }
+        lastMessagePreview:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            senderId: { type: string }
+            text: { type: string }
+            createdAt: { type: string, format: date-time }
+        memberCount: { type: integer }
+        disappearingMessages:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            ttlSeconds: { type: integer }
+            policy: { type: string, enum: [send_time] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ConversationEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [conversation]
+              properties:
+                conversation: { $ref: '#/components/schemas/Conversation' }
+
+    ConversationPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Conversation' }
+        nextCursor:
+          type: string
+          nullable: true
+
+    SendMessageRequest:
+      type: object
+      properties:
+        text: { type: string, minLength: 1, maxLength: 8000 }
+        replyToMessageId: { type: string }
+        attachmentIds:
+          type: array
+          items: { type: string }
+          maxItems: 10
+
+    Message:
+      type: object
+      required: [id, conversationId, senderId, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        senderId: { type: string }
+        text: { type: string, nullable: true }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/Attachment' }
+        replyToMessageId: { type: string, nullable: true }
+        editedAt: { type: string, format: date-time, nullable: true }
+        deletedAt: { type: string, format: date-time, nullable: true }
+        expiresAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    MessageEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [message]
+              properties:
+                message: { $ref: '#/components/schemas/Message' }
+
+    MessagePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        nextCursor:
+          type: string
+          nullable: true
+
+    Attachment:
+      type: object
+      required: [id, mimeType, sizeBytes, createdAt]
+      properties:
+        id: { type: string }
+        mimeType: { type: string }
+        sizeBytes: { type: integer }
+        originalFilename: { type: string, nullable: true }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        durationMs: { type: integer, nullable: true }
+        thumbnailUrl: { type: string, format: uri, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    AttachmentEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [attachment]
+              properties:
+                attachment: { $ref: '#/components/schemas/Attachment' }
+
+    UploadUrlRequest:
+      type: object
+      required: [mimeType, sizeBytes]
+      properties:
+        mimeType: { type: string }
+        sizeBytes: { type: integer, minimum: 1 }
+        originalFilename: { type: string, maxLength: 255 }
+
+    UploadUrlEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [attachmentId, upload]
+              properties:
+                attachmentId: { type: string }
+                upload:
+                  type: object
+                  required: [url, method, expiresAt]
+                  properties:
+                    url: { type: string, format: uri }
+                    method: { type: string, enum: [PUT, POST] }
+                    headers:
+                      type: object
+                      additionalProperties: { type: string }
+                    expiresAt: { type: string, format: date-time }
+
+    AttachmentDownloadEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [attachment, download]
+              properties:
+                attachment: { $ref: '#/components/schemas/Attachment' }
+                download:
+                  type: object
+                  required: [url, expiresAt]
+                  properties:
+                    url: { type: string, format: uri }
+                    expiresAt: { type: string, format: date-time }
+
+    Story:
+      type: object
+      required: [id, authorId, createdAt, expiresAt]
+      properties:
+        id: { type: string }
+        authorId: { type: string }
+        text: { type: string, nullable: true }
+        attachment: { $ref: '#/components/schemas/Attachment' }
+        audience:
+          type: string
+          enum: [everyone, contacts]
+        viewCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+
+    StoryEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [story]
+              properties:
+                story: { $ref: '#/components/schemas/Story' }
+
+    ReportRequest:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType:
+          type: string
+          enum: [user, message, story]
+        targetId: { type: string }
+        reason:
+          type: string
+          enum: [spam, harassment, illegal, csam, impersonation, other]
+        notes: { type: string, maxLength: 1000 }
+
+    InviteCreatedEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [invite]
+              properties:
+                invite:
+                  type: object
+                  required: [id, token, conversationId]
+                  properties:
+                    id: { type: string }
+                    token:
+                      type: string
+                      description: |
+                        Raw token. Returned **only once** at create time;
+                        not retrievable later. Stored hashed server-side.
+                    conversationId: { type: string }
+                    expiresAt: { type: string, format: date-time, nullable: true }
+                    maxUses: { type: integer, nullable: true }
+                    usesRemaining: { type: integer, nullable: true }
+                    createdAt: { type: string, format: date-time }
+
+    PrivacySettings:
+      type: object
+      properties:
+        whoCanFindMe:
+          type: string
+          enum: [everyone, contacts, nobody]
+        whoCanMessageMe:
+          type: string
+          enum: [everyone, contacts, nobody]
+        profilePhotoVisibility:
+          type: string
+          enum: [everyone, contacts, nobody]
+        onlineStatusVisibility:
+          type: string
+          enum: [everyone, contacts, nobody]
+        readReceiptsEnabled: { type: boolean }
+        discoverableByEmail: { type: boolean }
+        discoverableByPhone: { type: boolean }
+        discoverableByUsername: { type: boolean }
+
+    PrivacySettingsEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Success'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [privacySettings]
+              properties:
+                privacySettings: { $ref: '#/components/schemas/PrivacySettings' }

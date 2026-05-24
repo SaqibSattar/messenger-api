@@ -41,6 +41,10 @@ ENV NODE_ENV=production \
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node package.json ./
+# OpenAPI spec is read at runtime by src/middleware/openApi.ts to render
+# /docs and serve /openapi.{json,yaml}. The path resolves to
+# `${projectRoot}/docs/api/openapi.yaml`, so we mirror that here.
+COPY --chown=node:node docs/api/openapi.yaml ./docs/api/openapi.yaml
 
 EXPOSE 3000
 

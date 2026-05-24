@@ -45,6 +45,7 @@ import {
   inviteRouter
 } from './modules/invites/invite.routes';
 import { privacyRouter } from './modules/privacy/privacy.routes';
+import { mountApiDocs } from './middleware/openApi';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -164,6 +165,12 @@ export const buildApp = (): Express => {
   app.use('/api/v1/invites', inviteRouter);
   app.use('/api/v1/privacy-settings', privacyRouter);
   app.use('/api/v1/admin', adminRouter);
+
+  // Interactive API docs (Swagger UI + raw OpenAPI spec). Mounted after
+  // the feature routers so a route name like /docs cannot be shadowed
+  // by a module, and before the 404 handler so the docs surface returns
+  // its own assets.
+  mountApiDocs(app);
 
   app.use(notFound);
   app.use(errorHandler);

@@ -10,6 +10,23 @@ only under the rules in [VERSIONING.md](./VERSIONING.md).
 | [SOCKETS.md](./SOCKETS.md) | Socket.IO connection, rooms, client→server events, server→client events, and ack shape. |
 | [ERROR_CODES.md](./ERROR_CODES.md) | The catalogue of stable error codes returned in both REST and socket responses. |
 | [VERSIONING.md](./VERSIONING.md) | Versioning policy, what counts as a breaking change, and the deprecation process. |
+| [openapi.yaml](./openapi.yaml) | OpenAPI 3 spec. Source of truth for the interactive `/docs` UI and codegen. Pair with [REST.md](./REST.md) for prose / privacy rationale. |
+| [../postman/](../postman/) | Postman collection + matching environment file. The Login request captures `accessToken`/`refreshToken` into env vars; every other request inherits Bearer auth. |
+
+## Interactive exploration
+
+When the server is running you have three ways to drive the API:
+
+- **Swagger UI** — `GET /docs` renders [openapi.yaml](./openapi.yaml) in an
+  interactive console with "Authorize" support. The same spec is served raw at
+  `GET /openapi.json` and `GET /openapi.yaml` for codegen tools.
+- **Postman** — import
+  [`docs/postman/messenger-api.postman_collection.json`](../postman/messenger-api.postman_collection.json)
+  and
+  [`docs/postman/messenger-api.postman_environment.json`](../postman/messenger-api.postman_environment.json).
+  Run `Auth → Login (captures tokens)` first; subsequent requests pick up the
+  bearer token from the environment automatically.
+- **curl** — every example in [REST.md](./REST.md) is copy-pasteable.
 
 ## Conventions used everywhere
 

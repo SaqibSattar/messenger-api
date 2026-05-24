@@ -1,0 +1,1430 @@
+{
+  "info": {
+    "_postman_id": "5b1a2e34-9c5a-4b71-9c84-a1f0e5a01c4f",
+    "name": "messenger-api",
+    "description": "Postman collection for the messenger-api REST surface. Pair this with the `messenger-api (local)` environment file in the same directory. The Auth → Login request captures `accessToken` / `refreshToken` into env vars; every other request uses `{{accessToken}}` via Bearer auth at the collection root.\n\nThe canonical contract is `docs/api/openapi.yaml` (interactive at `GET /docs`). See `docs/api/REST.md` for the long-form documentation behind each request.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auto-fill convenience: ensure baseUrl has no trailing slash.",
+          "const base = pm.environment.get('baseUrl');",
+          "if (base && base.endsWith('/')) pm.environment.set('baseUrl', base.replace(/\\/+$/, ''));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Operations",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          }
+        },
+        {
+          "name": "GET /ready",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/ready", "host": ["{{baseUrl}}"], "path": ["ready"] }
+          }
+        },
+        {
+          "name": "GET /metrics (admin)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/metrics", "host": ["{{baseUrl}}"], "path": ["metrics"] }
+          }
+        },
+        {
+          "name": "GET /docs (Swagger UI)",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/docs/", "host": ["{{baseUrl}}"], "path": ["docs", ""] }
+          }
+        },
+        {
+          "name": "GET /openapi.json",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/openapi.json", "host": ["{{baseUrl}}"], "path": ["openapi.json"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"new-user@example.com\",\n  \"password\": \"AStrongPassword!23\",\n  \"displayName\": \"New User\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/register", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "register"] }
+          }
+        },
+        {
+          "name": "Login (captures tokens)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.tokens) {",
+                  "  pm.environment.set('accessToken', body.data.tokens.accessToken);",
+                  "  pm.environment.set('refreshToken', body.data.tokens.refreshToken);",
+                  "  if (body.data.user && body.data.user.id) pm.environment.set('userId', body.data.user.id);",
+                  "  console.log('Captured tokens for', body.data.user && body.data.user.id);",
+                  "} else {",
+                  "  console.warn('Login response did not contain tokens', body);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Refresh (rotates refreshToken)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.tokens) {",
+                  "  pm.environment.set('accessToken', body.data.tokens.accessToken);",
+                  "  pm.environment.set('refreshToken', body.data.tokens.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"refreshToken\": \"{{refreshToken}}\" }"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "refresh"] }
+          }
+        },
+        {
+          "name": "Logout (one session)",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"refreshToken\": \"{{refreshToken}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/logout", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "logout"] }
+          }
+        },
+        {
+          "name": "Logout all sessions",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/logout-all", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "logout-all"] }
+          }
+        },
+        {
+          "name": "Change password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{password}}\",\n  \"newPassword\": \"NewStrongPassword!23\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/change-password", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "change-password"] }
+          }
+        },
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"email\": \"{{email}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/forgot-password", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "forgot-password"] }
+          }
+        },
+        {
+          "name": "Reset password",
+          "request": {
+            "method": "POST",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"<reset-token-from-email>\",\n  \"newPassword\": \"NewStrongPassword!23\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/reset-password", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "reset-password"] }
+          }
+        },
+        {
+          "name": "Me (auth.me)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/me", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "me"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "GET /users/me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me"] }
+          }
+        },
+        {
+          "name": "PATCH /users/me",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"displayName\": \"Alice (updated)\",\n  \"bio\": \"Likes long walks on the beach.\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me"] }
+          }
+        },
+        {
+          "name": "Deactivate account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"password\": \"{{password}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/deactivate", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me", "deactivate"] }
+          }
+        },
+        {
+          "name": "Request account deletion",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"password\": \"{{password}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/delete-request", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me", "delete-request"] }
+          }
+        },
+        {
+          "name": "Cancel pending deletion",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/delete-cancel", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me", "delete-cancel"] }
+          }
+        },
+        {
+          "name": "Data export",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/users/me/data-export", "host": ["{{baseUrl}}"], "path": ["api", "v1", "users", "me", "data-export"] }
+          }
+        },
+        {
+          "name": "Search users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/search?q=alice&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "search"],
+              "query": [
+                { "key": "q", "value": "alice" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Public profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/{{peerUserId}}/public",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "{{peerUserId}}", "public"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Conversations",
+      "item": [
+        {
+          "name": "Create / fetch direct conversation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.conversation) {",
+                  "  pm.environment.set('conversationId', body.data.conversation.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"peerUserId\": \"{{peerUserId}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/conversations/direct", "host": ["{{baseUrl}}"], "path": ["api", "v1", "conversations", "direct"] }
+          }
+        },
+        {
+          "name": "Create group conversation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.conversation) {",
+                  "  pm.environment.set('conversationId', body.data.conversation.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Project channel\",\n  \"memberUserIds\": [\"{{peerUserId}}\"]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/conversations/groups", "host": ["{{baseUrl}}"], "path": ["api", "v1", "conversations", "groups"] }
+          }
+        },
+        {
+          "name": "List my conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations"],
+              "query": [{ "key": "limit", "value": "30" }]
+            }
+          }
+        },
+        {
+          "name": "Get one conversation",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}"]
+            }
+          }
+        },
+        {
+          "name": "Update conversation settings",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Renamed channel\",\n  \"topic\": \"What we're working on this week\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}"]
+            }
+          }
+        },
+        {
+          "name": "Add members",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"userIds\": [\"{{peerUserId}}\"] }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "members"]
+            }
+          }
+        },
+        {
+          "name": "Remove member",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/members/{{peerUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "members", "{{peerUserId}}"]
+            }
+          }
+        },
+        {
+          "name": "Change member role",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"role\": \"admin\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/members/{{peerUserId}}/role",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "members", "{{peerUserId}}", "role"]
+            }
+          }
+        },
+        {
+          "name": "Leave conversation",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/leave",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "leave"]
+            }
+          }
+        },
+        {
+          "name": "Mark conversation read",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"lastReadMessageId\": \"{{messageId}}\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "read"]
+            }
+          }
+        },
+        {
+          "name": "Update per-conversation preferences",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mutedUntil\": null,\n  \"archived\": false,\n  \"pinned\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "preferences"]
+            }
+          }
+        },
+        {
+          "name": "Update disappearing-message settings",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"ttlSeconds\": 86400,\n  \"policy\": \"send_time\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/disappearing-messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "disappearing-messages"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "Send message",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.message) {",
+                  "  pm.environment.set('messageId', body.data.message.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"text\": \"hello from postman\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "messages"]
+            }
+          }
+        },
+        {
+          "name": "List messages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/messages?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "messages"],
+              "query": [{ "key": "limit", "value": "30" }]
+            }
+          }
+        },
+        {
+          "name": "Get one message",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "Edit message",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"text\": \"edited from postman\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete message",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}"]
+            }
+          }
+        },
+        {
+          "name": "Add reaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"emoji\": \"\\ud83d\\udc4d\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}/reactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}", "reactions"]
+            }
+          }
+        },
+        {
+          "name": "Remove reaction",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}/reactions/{{reactionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}", "reactions", "{{reactionId}}"]
+            }
+          }
+        },
+        {
+          "name": "Mark delivered",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}/delivered",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}", "delivered"]
+            }
+          }
+        },
+        {
+          "name": "Mark read",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}", "read"]
+            }
+          }
+        },
+        {
+          "name": "Expire-now (disappearing)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/messages/{{messageId}}/expire-now",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "messages", "{{messageId}}", "expire-now"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Media",
+      "item": [
+        {
+          "name": "Request upload URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.attachmentId) {",
+                  "  pm.environment.set('attachmentId', body.data.attachmentId);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mimeType\": \"image/jpeg\",\n  \"sizeBytes\": 524288,\n  \"originalFilename\": \"photo.jpg\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/media/upload-url", "host": ["{{baseUrl}}"], "path": ["api", "v1", "media", "upload-url"] }
+          }
+        },
+        {
+          "name": "Complete upload",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"attachmentId\": \"{{attachmentId}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/media/complete", "host": ["{{baseUrl}}"], "path": ["api", "v1", "media", "complete"] }
+          }
+        },
+        {
+          "name": "Get download URL",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/media/{{attachmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "media", "{{attachmentId}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete attachment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/media/{{attachmentId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "media", "{{attachmentId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Stories",
+      "item": [
+        {
+          "name": "Post story",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.story) {",
+                  "  pm.environment.set('storyId', body.data.story.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Posting a story\",\n  \"audience\": \"contacts\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/stories", "host": ["{{baseUrl}}"], "path": ["api", "v1", "stories"] }
+          }
+        },
+        {
+          "name": "List stories",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/stories", "host": ["{{baseUrl}}"], "path": ["api", "v1", "stories"] }
+          }
+        },
+        {
+          "name": "Mute author",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"userId\": \"{{peerUserId}}\" }" },
+            "url": { "raw": "{{baseUrl}}/api/v1/stories/mutes", "host": ["{{baseUrl}}"], "path": ["api", "v1", "stories", "mutes"] }
+          }
+        },
+        {
+          "name": "Unmute author",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/mutes/{{peerUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "mutes", "{{peerUserId}}"]
+            }
+          }
+        },
+        {
+          "name": "Get story",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/{{storyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "{{storyId}}"]
+            }
+          }
+        },
+        {
+          "name": "Record view",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/{{storyId}}/view",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "{{storyId}}", "view"]
+            }
+          }
+        },
+        {
+          "name": "List viewers (author only)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/{{storyId}}/viewers",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "{{storyId}}", "viewers"]
+            }
+          }
+        },
+        {
+          "name": "Delete own story",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/{{storyId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "{{storyId}}"]
+            }
+          }
+        },
+        {
+          "name": "Report story",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetType\": \"story\",\n  \"targetId\": \"{{storyId}}\",\n  \"reason\": \"spam\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/stories/{{storyId}}/report",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "stories", "{{storyId}}", "report"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Contacts",
+      "item": [
+        {
+          "name": "Send contact request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && (body.data.request && body.data.request.id)) {",
+                  "  pm.environment.set('requestId', body.data.request.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetUserId\": \"{{peerUserId}}\",\n  \"note\": \"Hi, met you at the conference\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/contacts/requests", "host": ["{{baseUrl}}"], "path": ["api", "v1", "contacts", "requests"] }
+          }
+        },
+        {
+          "name": "Incoming requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/contacts/requests/incoming", "host": ["{{baseUrl}}"], "path": ["api", "v1", "contacts", "requests", "incoming"] }
+          }
+        },
+        {
+          "name": "Outgoing requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/contacts/requests/outgoing", "host": ["{{baseUrl}}"], "path": ["api", "v1", "contacts", "requests", "outgoing"] }
+          }
+        },
+        {
+          "name": "Accept request",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/contacts/requests/{{requestId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "contacts", "requests", "{{requestId}}", "accept"]
+            }
+          }
+        },
+        {
+          "name": "Decline request",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/contacts/requests/{{requestId}}/decline",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "contacts", "requests", "{{requestId}}", "decline"]
+            }
+          }
+        },
+        {
+          "name": "Cancel outgoing request",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/contacts/requests/{{requestId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "contacts", "requests", "{{requestId}}"]
+            }
+          }
+        },
+        {
+          "name": "List contacts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/contacts", "host": ["{{baseUrl}}"], "path": ["api", "v1", "contacts"] }
+          }
+        },
+        {
+          "name": "Remove contact",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/contacts/{{peerUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "contacts", "{{peerUserId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Invites",
+      "item": [
+        {
+          "name": "Create invite link",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.invite) {",
+                  "  pm.environment.set('inviteId', body.data.invite.id);",
+                  "  if (body.data.invite.token) pm.environment.set('inviteToken', body.data.invite.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maxUses\": 10\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/invites",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "invites"]
+            }
+          }
+        },
+        {
+          "name": "List invites for conversation",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/invites",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "invites"]
+            }
+          }
+        },
+        {
+          "name": "Join via invite token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/invites/{{inviteToken}}/join",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "invites", "{{inviteToken}}", "join"]
+            }
+          }
+        },
+        {
+          "name": "Revoke invite",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/invites/{{inviteId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "invites", "{{inviteId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "List notifications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications"],
+              "query": [{ "key": "limit", "value": "30" }]
+            }
+          }
+        },
+        {
+          "name": "Mark one read",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/{{notificationId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "{{notificationId}}", "read"]
+            }
+          }
+        },
+        {
+          "name": "Mark one unread",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/{{notificationId}}/unread",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "notifications", "{{notificationId}}", "unread"]
+            }
+          }
+        },
+        {
+          "name": "Read all",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/notifications/read-all", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notifications", "read-all"] }
+          }
+        },
+        {
+          "name": "Get global notification preferences",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/notification-preferences", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notification-preferences"] }
+          }
+        },
+        {
+          "name": "Update global notification preferences",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pushEnabled\": true,\n  \"emailEnabled\": false,\n  \"inAppEnabled\": true\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/notification-preferences", "host": ["{{baseUrl}}"], "path": ["api", "v1", "notification-preferences"] }
+          }
+        },
+        {
+          "name": "Get per-conversation preferences",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/notification-preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "notification-preferences"]
+            }
+          }
+        },
+        {
+          "name": "Update per-conversation preferences",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pushEnabled\": false,\n  \"muteUntil\": null\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/conversations/{{conversationId}}/notification-preferences",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "conversations", "{{conversationId}}", "notification-preferences"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Devices",
+      "item": [
+        {
+          "name": "Register device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.device) {",
+                  "  pm.environment.set('deviceId', body.data.device.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform\": \"ios\",\n  \"token\": \"<APNs-or-FCM-token>\",\n  \"label\": \"iPhone 15\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/devices", "host": ["{{baseUrl}}"], "path": ["api", "v1", "devices"] }
+          }
+        },
+        {
+          "name": "List devices",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/devices", "host": ["{{baseUrl}}"], "path": ["api", "v1", "devices"] }
+          }
+        },
+        {
+          "name": "Update device",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Personal iPhone\",\n  \"muted\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "devices", "{{deviceId}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete device",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/devices/{{deviceId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "devices", "{{deviceId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Blocks",
+      "item": [
+        {
+          "name": "Block user",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{peerUserId}}\",\n  \"reason\": \"spam\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/blocks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "blocks"] }
+          }
+        },
+        {
+          "name": "List blocked users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/blocks", "host": ["{{baseUrl}}"], "path": ["api", "v1", "blocks"] }
+          }
+        },
+        {
+          "name": "Unblock user",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/blocks/{{blockedUserId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "blocks", "{{blockedUserId}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Create report",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "if (body && body.success && body.data && body.data.report) {",
+                  "  pm.environment.set('reportId', body.data.report.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targetType\": \"message\",\n  \"targetId\": \"{{messageId}}\",\n  \"reason\": \"harassment\",\n  \"notes\": \"Repeated abuse\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/reports", "host": ["{{baseUrl}}"], "path": ["api", "v1", "reports"] }
+          }
+        },
+        {
+          "name": "List reports",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/reports", "host": ["{{baseUrl}}"], "path": ["api", "v1", "reports"] }
+          }
+        },
+        {
+          "name": "Get report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reports/{{reportId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "reports", "{{reportId}}"]
+            }
+          }
+        },
+        {
+          "name": "Update report status (moderator)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"approved\",\n  \"notes\": \"Confirmed abuse\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reports/{{reportId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "reports", "{{reportId}}", "status"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Moderation",
+      "item": [
+        {
+          "name": "Apply moderation action",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"suspend\",\n  \"targetType\": \"user\",\n  \"targetId\": \"{{peerUserId}}\",\n  \"reason\": \"Repeated TOS violation\",\n  \"durationDays\": 7\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/moderation/actions", "host": ["{{baseUrl}}"], "path": ["api", "v1", "moderation", "actions"] }
+          }
+        },
+        {
+          "name": "List moderation actions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/moderation/actions?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "moderation", "actions"],
+              "query": [{ "key": "limit", "value": "30" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Search",
+      "item": [
+        {
+          "name": "Search conversations",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/conversations?q=project&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "conversations"],
+              "query": [
+                { "key": "q", "value": "project" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Search messages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/messages?q=hello&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "messages"],
+              "query": [
+                { "key": "q", "value": "hello" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Search users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/users?q=alice&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "search", "users"],
+              "query": [
+                { "key": "q", "value": "alice" },
+                { "key": "limit", "value": "20" }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Privacy",
+      "item": [
+        {
+          "name": "Get privacy settings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/privacy-settings", "host": ["{{baseUrl}}"], "path": ["api", "v1", "privacy-settings"] }
+          }
+        },
+        {
+          "name": "Update privacy settings",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"whoCanFindMe\": \"contacts\",\n  \"whoCanMessageMe\": \"contacts\",\n  \"readReceiptsEnabled\": false\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/privacy-settings", "host": ["{{baseUrl}}"], "path": ["api", "v1", "privacy-settings"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Promote / demote user role",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{ \"role\": \"moderator\" }" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{peerUserId}}/role",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "users", "{{peerUserId}}", "role"]
+            }
+          }
+        },
+        {
+          "name": "Adjust custom permissions",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"permissions\": [\"report:review\", \"moderation:action\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/users/{{peerUserId}}/permissions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "users", "{{peerUserId}}", "permissions"]
+            }
+          }
+        },
+        {
+          "name": "List audit log",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/audit-logs?limit=30",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "admin", "audit-logs"],
+              "query": [{ "key": "limit", "value": "30" }]
+            }
+          }
+        },
+        {
+          "name": "System summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/admin/system-summary", "host": ["{{baseUrl}}"], "path": ["api", "v1", "admin", "system-summary"] }
+          }
+        }
+      ]
+    }
+  ]
+}

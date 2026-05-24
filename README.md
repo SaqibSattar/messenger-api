@@ -6,6 +6,15 @@ spec and security rules — this README only covers operational concerns.
 
 For **client integration** (REST routes, socket events, error codes, the
 versioning/deprecation policy), start at [`docs/api/README.md`](docs/api/README.md).
+The fastest paths in:
+
+- **Swagger UI** — start the server and open `GET /docs` for an interactive
+  console driven by [`docs/api/openapi.yaml`](docs/api/openapi.yaml).
+- **Postman** — import
+  [`docs/postman/messenger-api.postman_collection.json`](docs/postman/messenger-api.postman_collection.json)
+  and the matching `.postman_environment.json`. Run **Auth → Login** to
+  capture tokens into the environment, then every other request inherits
+  Bearer auth.
 
 Operational and architecture docs:
 
