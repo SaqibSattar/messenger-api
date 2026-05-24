@@ -40,6 +40,19 @@ export type MessageExpirationPolicy =
 // override via env later.
 export const DISAPPEARING_CLEANUP_BATCH_SIZE = 200;
 
+// Lean attachment shape embedded in a message DTO. The full attachment can
+// still be fetched via /api/v1/media/:id when the client needs a download
+// URL — keeping this minimal avoids bloating the message payload on lists.
+export interface MessageAttachmentSummary {
+  id: string;
+  mimeType: string;
+  sizeBytes: number;
+  originalFilename: string;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+}
+
 export interface MessageDto {
   id: string;
   conversationId: string;
@@ -47,6 +60,7 @@ export interface MessageDto {
   // null when the message has been deleted OR expired — the original body
   // stays in the DB for moderation/audit but is never returned to API clients.
   text: string | null;
+  attachments?: MessageAttachmentSummary[];
   replyToMessageId?: string;
   editedAt?: string;
   deletedAt?: string;

@@ -22,6 +22,9 @@ import {
   type AuthenticatedActor
 } from '../permissions/authorization';
 import { PERMISSIONS } from '../permissions/permissions.constants';
+import { Attachment } from '../media/attachment.model';
+import { attachToMessage } from '../media/media.service';
+import { ATTACHMENT_STATUS } from '../media/media.types';
 import { Message, toMessageDto, type MessageDocument } from './message.model';
 import {
   MessageReceipt,
@@ -37,6 +40,7 @@ import {
   MESSAGE_EXPIRATION_POLICY,
   MESSAGE_PREVIEW_MAX_LENGTH,
   type ListMessagesResult,
+  type MessageAttachmentSummary,
   type MessageDto,
   type MessageReactionDto,
   type MessageReceiptDto
@@ -131,13 +135,77 @@ const updateConversationLastMessage = async (
   const current = conversation.lastMessage;
   if (current && current.sentAt > message.createdAt) return;
 
+  // For attachment-only messages the text is empty; fall back to a generic
+  // attachment marker so the inbox preview isn't blank. The Mongoose schema
+  // requires a non-empty preview string — never let it be ''.
+  let preview = buildPreview(message.text);
+  if (preview.length === 0) {
+    const count = message.attachments?.length ?? 0;
+    preview =
+      count > 1 ? `[${count} attachments]` : count === 1 ? '[attachment]' : '…';
+  }
+
   conversation.lastMessage = {
     messageId: message._id as Types.ObjectId,
     senderId: message.senderId,
-    preview: buildPreview(message.text),
+    preview,
     sentAt: message.createdAt
   };
   await conversation.save();
+};
+
+// Batch-load attachments for a set of message documents and return a map of
+// messageId -> attachment summary list. Used to enrich DTOs without forcing
+// callers to N+1 the media collection. Only attachments still in the
+// `attached` state are surfaced — anything deleted, rejected, or otherwise
+// in an unexpected state is dropped so a leaked id can't surface stale
+// metadata.
+const loadAttachmentSummariesForMessages = async (
+  messages: MessageDocument[]
+): Promise<Map<string, MessageAttachmentSummary[]>> => {
+  const result = new Map<string, MessageAttachmentSummary[]>();
+  const allIds = messages.flatMap((m) =>
+    (m.attachments ?? []).map((id) => (id as Types.ObjectId).toString())
+  );
+  if (allIds.length === 0) return result;
+
+  const uniqueIds = Array.from(new Set(allIds)).map(
+    (id) => new mongoose.Types.ObjectId(id)
+  );
+  const attachments = await Attachment.find({
+    _id: { $in: uniqueIds },
+    status: ATTACHMENT_STATUS.ATTACHED
+  });
+  const byId = new Map(
+    attachments.map((a) => [(a._id as Types.ObjectId).toString(), a])
+  );
+
+  for (const msg of messages) {
+    const msgId = (msg._id as Types.ObjectId).toString();
+    const summaries: MessageAttachmentSummary[] = [];
+    for (const ref of msg.attachments ?? []) {
+      const a = byId.get(ref.toString());
+      if (!a) continue;
+      const summary: MessageAttachmentSummary = {
+        id: (a._id as Types.ObjectId).toString(),
+        mimeType: a.mimeType,
+        sizeBytes: a.sizeBytes,
+        originalFilename: a.originalFilename
+      };
+      if (a.width != null) summary.width = a.width;
+      if (a.height != null) summary.height = a.height;
+      if (a.durationSeconds != null) summary.durationSeconds = a.durationSeconds;
+      summaries.push(summary);
+    }
+    if (summaries.length > 0) result.set(msgId, summaries);
+  }
+  return result;
+};
+
+const buildMessageDto = async (msg: MessageDocument): Promise<MessageDto> => {
+  const map = await loadAttachmentSummariesForMessages([msg]);
+  const summaries = map.get((msg._id as Types.ObjectId).toString());
+  return toMessageDto(msg, summaries);
 };
 
 const findDirectCounterpartyId = async (
@@ -218,9 +286,45 @@ export const sendMessage = async (
     ...expirationFields
   });
 
+  // Bind attachments after the message exists so they reference a real id.
+  // If the bind fails (ownership / status / cross-conversation), roll back
+  // the message — better than leaving a body with phantom attachment refs.
+  let attachmentSummaries: MessageAttachmentSummary[] | undefined;
+  if (input.attachmentIds && input.attachmentIds.length > 0) {
+    try {
+      const attached = await attachToMessage({
+        actor,
+        conversationId: conv._id.toString(),
+        messageId: (msg._id as Types.ObjectId).toString(),
+        attachmentIds: input.attachmentIds
+      });
+      msg.attachments = attached.map((a) => a._id as Types.ObjectId);
+      await msg.save();
+      attachmentSummaries = attached.map((a) => {
+        const summary: MessageAttachmentSummary = {
+          id: (a._id as Types.ObjectId).toString(),
+          mimeType: a.mimeType,
+          sizeBytes: a.sizeBytes,
+          originalFilename: a.originalFilename
+        };
+        if (a.width != null) summary.width = a.width;
+        if (a.height != null) summary.height = a.height;
+        if (a.durationSeconds != null) {
+          summary.durationSeconds = a.durationSeconds;
+        }
+        return summary;
+      });
+    } catch (err) {
+      // Roll back the message — it never made it into the conversation
+      // preview yet, so we don't have to undo lastMessage either.
+      await Message.deleteOne({ _id: msg._id });
+      throw err;
+    }
+  }
+
   await updateConversationLastMessage(conv, msg);
 
-  const dto = toMessageDto(msg);
+  const dto = toMessageDto(msg, attachmentSummaries);
   emitRealtime('message.created', {
     conversationId: dto.conversationId,
     message: dto
@@ -256,7 +360,13 @@ export const listMessages = async (
   const hasMore = docs.length > query.limit;
   const page = hasMore ? docs.slice(0, query.limit) : docs;
 
-  const items = page.map(toMessageDto);
+  const attachmentsByMessage = await loadAttachmentSummariesForMessages(page);
+  const items = page.map((doc) =>
+    toMessageDto(
+      doc,
+      attachmentsByMessage.get((doc._id as Types.ObjectId).toString())
+    )
+  );
   const nextCursor =
     hasMore && page.length > 0
       ? (page[page.length - 1]._id as Types.ObjectId).toString()
@@ -272,7 +382,7 @@ export const getMessage = async (
   const conversationId = msg.conversationId.toString();
   const membership = await findActiveMembership(conversationId, actor.id);
   assertConversationMembership(membership, actor, conversationId);
-  return toMessageDto(msg);
+  return buildMessageDto(msg);
 };
 
 // ---------------------------------------------------------------------------
@@ -310,7 +420,7 @@ export const editMessage = async (
   msg.editedAt = new Date();
   await msg.save();
 
-  const dto = toMessageDto(msg);
+  const dto = await buildMessageDto(msg);
   emitRealtime('message.updated', {
     conversationId: dto.conversationId,
     message: dto
@@ -346,6 +456,9 @@ export const deleteMessage = async (
     : MESSAGE_DELETION_REASON.USER_DELETED;
   await msg.save();
 
+  // Deleted message: drop attachments from the DTO (toMessageDto already
+  // masks them when the parent is redacted). The attachment documents remain
+  // in the DB for moderation/audit until a separate sweep cleans them up.
   const dto = toMessageDto(msg);
   emitRealtime('message.deleted', {
     conversationId: dto.conversationId,

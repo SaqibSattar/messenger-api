@@ -30,7 +30,40 @@ const schema = z.object({
     .default(60),
   // How long a presence entry survives without a refresh. presence.ping resets
   // the TTL; the cleanup job and disconnect handler also remove stale entries.
-  PRESENCE_TTL_SECONDS: z.coerce.number().int().positive().default(90)
+  PRESENCE_TTL_SECONDS: z.coerce.number().int().positive().default(90),
+  // Media / attachment settings. The defaults are conservative — a 25 MB cap
+  // covers normal photos, short videos, and PDFs without letting clients push
+  // a request that would dominate the API egress budget.
+  STORAGE_PROVIDER: z.enum(['memory', 's3']).default('memory'),
+  STORAGE_BUCKET: z.string().min(1).optional(),
+  STORAGE_REGION: z.string().min(1).optional(),
+  STORAGE_ACCESS_KEY_ID: z.string().min(1).optional(),
+  STORAGE_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  // Public base URL prefix used by the memory provider for synthetic signed
+  // URLs. A real S3 provider derives its host from bucket/region instead.
+  STORAGE_PUBLIC_BASE_URL: z.string().min(1).default('https://storage.example.local'),
+  // Secret used by the memory provider to sign URLs. Required-in-production
+  // checks (see below) reject the placeholder.
+  STORAGE_SIGNING_SECRET: z
+    .string()
+    .min(1)
+    .default('replace-me-storage-signing-secret'),
+  MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  MEDIA_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  MEDIA_DOWNLOAD_URL_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(300),
+  // Pending attachments older than this with no `complete` call are reaped by
+  // the orphan cleanup job.
+  MEDIA_PENDING_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  MEDIA_MAX_ATTACHMENTS_PER_MESSAGE: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(20)
+    .default(10)
 });
 
 const parsed = schema.safeParse(process.env);
@@ -66,6 +99,28 @@ if (data.NODE_ENV === 'production') {
     placeholders.includes(data.JWT_REFRESH_SECRET ?? '')
   ) {
     throw new Error('JWT secrets must not use placeholder values in production');
+  }
+  if (data.STORAGE_PROVIDER === 's3') {
+    const requiredForS3 = [
+      'STORAGE_BUCKET',
+      'STORAGE_REGION',
+      'STORAGE_ACCESS_KEY_ID',
+      'STORAGE_SECRET_ACCESS_KEY'
+    ] as const;
+    const missingS3 = requiredForS3.filter((k) => !data[k]);
+    if (missingS3.length > 0) {
+      throw new Error(
+        `STORAGE_PROVIDER=s3 requires ${missingS3.join(', ')} to be set`
+      );
+    }
+  }
+  if (
+    data.STORAGE_SIGNING_SECRET === 'replace-me-storage-signing-secret' ||
+    placeholders.includes(data.STORAGE_SIGNING_SECRET)
+  ) {
+    throw new Error(
+      'STORAGE_SIGNING_SECRET must not use placeholder values in production'
+    );
   }
 }
 

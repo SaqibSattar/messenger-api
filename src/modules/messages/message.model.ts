@@ -2,6 +2,7 @@ import mongoose, { Schema, type Model, type Types } from 'mongoose';
 import {
   MESSAGE_DELETION_REASON,
   MESSAGE_EXPIRATION_POLICY,
+  type MessageAttachmentSummary,
   type MessageDeletionReason,
   type MessageDto,
   type MessageExpirationPolicy
@@ -11,8 +12,8 @@ export interface MessageAttrs {
   conversationId: Types.ObjectId;
   senderId: Types.ObjectId;
   text: string;
-  // Reserved for the media module (07). The schema accepts the field so the
-  // shape is stable now and migrations are unnecessary later.
+  // Attachment ObjectIds set when the message is created with media. The
+  // media module owns the lifecycle; here we only store the references.
   attachments: Types.ObjectId[];
   replyToMessageId?: Types.ObjectId;
   editedAt?: Date;
@@ -93,7 +94,10 @@ messageSchema.index(
   { sparse: true, partialFilterExpression: { expiredAt: { $exists: false } } }
 );
 
-export const toMessageDto = (doc: MessageDocument): MessageDto => {
+export const toMessageDto = (
+  doc: MessageDocument,
+  attachments?: MessageAttachmentSummary[]
+): MessageDto => {
   const id = (doc._id as Types.ObjectId).toString();
   // A message is considered redacted-from-clients if it's deleted, has been
   // processed by the expiration job, OR is past its expiresAt window but the
@@ -112,6 +116,13 @@ export const toMessageDto = (doc: MessageDocument): MessageDto => {
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString()
   };
+  // Attachments are dropped from the DTO when the message is redacted so an
+  // expired body doesn't continue to leak media to clients. The underlying
+  // attachment lifecycle is managed by the media module; the message DTO
+  // simply doesn't surface them once the parent message is gone.
+  if (!isRedacted && attachments && attachments.length > 0) {
+    dto.attachments = attachments;
+  }
   if (doc.replyToMessageId) {
     dto.replyToMessageId = doc.replyToMessageId.toString();
   }

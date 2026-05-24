@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { env } from '../../config/env';
 import {
   LIST_MESSAGES_DEFAULT_LIMIT,
   LIST_MESSAGES_MAX_LIMIT,
@@ -94,12 +95,24 @@ export const messageReactionParamSchema = z
 export const sendMessageSchema = z
   .object({
     text: messageTextSchema.optional(),
-    replyToMessageId: objectIdSchema.optional()
+    replyToMessageId: objectIdSchema.optional(),
+    // Attachment ids the caller wants linked to the new message. Each id must
+    // be owned by the caller and currently in the `uploaded` state — the
+    // service enforces that. The cap protects the fan-out: a message with
+    // hundreds of attachments would dwarf the message itself.
+    attachmentIds: z
+      .array(objectIdSchema)
+      .max(env.MEDIA_MAX_ATTACHMENTS_PER_MESSAGE)
+      .optional()
   })
   .strict()
-  .refine((d) => (d.text?.length ?? 0) > 0, {
-    message: 'Message must have non-empty text'
-  });
+  // A message must carry SOMETHING — either body text or at least one
+  // attachment. An empty payload would just be noise on the timeline.
+  .refine(
+    (d) =>
+      (d.text?.length ?? 0) > 0 || (d.attachmentIds?.length ?? 0) > 0,
+    { message: 'Message must have text or at least one attachment' }
+  );
 
 export const editMessageSchema = z
   .object({
