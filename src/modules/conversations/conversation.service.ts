@@ -17,6 +17,7 @@ import {
   type AuthenticatedActor
 } from '../permissions/authorization';
 import { PERMISSIONS } from '../permissions/permissions.constants';
+import { isBlockedBetween } from '../moderation/block.service';
 import {
   Conversation,
   buildDirectKey,
@@ -85,17 +86,6 @@ const ensureActiveUsersExist = async (userIds: string[]): Promise<void> => {
   if (count !== userIds.length) {
     throw new BadRequestError('One or more users do not exist or are not active');
   }
-};
-
-// Block check stub. The blocks collection lands with the moderation module
-// (09-blocking-and-reporting.md); until then, calls return false. Keeping the
-// call site here means the security wiring is in place — the moderation
-// module will only need to swap out the implementation.
-const isBlockedBetween = async (
-  _userIdA: string,
-  _userIdB: string
-): Promise<boolean> => {
-  return false;
 };
 
 const requireActiveMembership = async (

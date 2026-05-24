@@ -63,6 +63,34 @@ export interface StoryReportedEvent {
   hasDetails: boolean;
 }
 
+export interface ReportCreatedEvent {
+  reportId: string;
+  targetType: 'user' | 'message' | 'conversation';
+  targetId: string;
+  reason: string;
+  // Body never goes to the log — only the fact one was attached.
+  hasDetails: boolean;
+}
+
+export interface ReportStatusChangedEvent {
+  reportId: string;
+  previousStatus: 'open' | 'reviewing' | 'resolved' | 'dismissed';
+  newStatus: 'open' | 'reviewing' | 'resolved' | 'dismissed';
+  targetType: 'user' | 'message' | 'conversation';
+  targetId: string;
+  hasNote: boolean;
+}
+
+export interface ModerationActionEvent {
+  actionId: string;
+  actionType: string;
+  targetType: 'user' | 'message' | 'conversation' | 'story';
+  targetId: string;
+  relatedReportId?: string;
+  hasReason: boolean;
+  hasMetadata: boolean;
+}
+
 const auditEvent = (
   event: string,
   ctx: AuditContext,
@@ -122,4 +150,25 @@ export const auditStoryReported = (
   event: StoryReportedEvent
 ): void => {
   auditEvent('story.reported', ctx, { ...event });
+};
+
+export const auditReportCreated = (
+  ctx: AuditContext,
+  event: ReportCreatedEvent
+): void => {
+  auditEvent('report.created', ctx, { ...event });
+};
+
+export const auditReportStatusChanged = (
+  ctx: AuditContext,
+  event: ReportStatusChangedEvent
+): void => {
+  auditEvent('report.status_changed', ctx, { ...event });
+};
+
+export const auditModerationAction = (
+  ctx: AuditContext,
+  event: ModerationActionEvent
+): void => {
+  auditEvent('moderation.action', ctx, { ...event });
 };

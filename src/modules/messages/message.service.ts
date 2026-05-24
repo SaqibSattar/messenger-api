@@ -25,6 +25,7 @@ import { PERMISSIONS } from '../permissions/permissions.constants';
 import { Attachment } from '../media/attachment.model';
 import { attachToMessage } from '../media/media.service';
 import { ATTACHMENT_STATUS } from '../media/media.types';
+import { isBlockedBetween } from '../moderation/block.service';
 import { Message, toMessageDto, type MessageDocument } from './message.model';
 import {
   MessageReceipt,
@@ -100,16 +101,6 @@ const fetchMessageOr404 = async (
   const msg = await Message.findById(messageId);
   if (!msg) throw new NotFoundError('Message not found');
   return msg;
-};
-
-// Block check stub. The blocks collection lands with the moderation module
-// (08-blocking-reporting-moderation.md); until then this returns false. The
-// call site exists so the moderation prompt is a single-file swap.
-const isBlockedBetween = async (
-  _userIdA: string,
-  _userIdB: string
-): Promise<boolean> => {
-  return false;
 };
 
 const isConversationAdmin = (
