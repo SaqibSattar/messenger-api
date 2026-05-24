@@ -4,6 +4,7 @@ import type {
   MessageReactionDto,
   MessageReceiptDto
 } from '../modules/messages/message.types';
+import type { DisappearingMessageSettings } from '../modules/conversations/conversation.types';
 
 /**
  * In-process realtime event bus.
@@ -42,14 +43,28 @@ export interface RealtimeReceiptPayload {
   receipt: MessageReceiptDto;
 }
 
+export interface RealtimeDisappearingSettingsPayload {
+  conversationId: string;
+  disappearingMessages: DisappearingMessageSettings;
+}
+
+export interface RealtimeMessageExpiredPayload {
+  conversationId: string;
+  messageId: string;
+  // Carries the redacted DTO so listeners can replace local state directly.
+  message: MessageDto;
+}
+
 export interface RealtimeEventMap {
   'message.created': RealtimeMessagePayload;
   'message.updated': RealtimeMessagePayload;
   'message.deleted': RealtimeMessagePayload;
+  'message.expired': RealtimeMessageExpiredPayload;
   'message.reaction_added': RealtimeReactionPayload;
   'message.reaction_removed': RealtimeReactionRemovedPayload;
   'message.delivered': RealtimeReceiptPayload;
   'message.read': RealtimeReceiptPayload;
+  'conversation.disappearing_settings_updated': RealtimeDisappearingSettingsPayload;
 }
 
 export type RealtimeEventName = keyof RealtimeEventMap;

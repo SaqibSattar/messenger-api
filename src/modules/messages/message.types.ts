@@ -19,24 +19,42 @@ export const REACTION_EMOJI_MAX_LENGTH = 32;
 
 export const MESSAGE_DELETION_REASON = {
   USER_DELETED: 'user_deleted',
-  MODERATOR_DELETED: 'moderator_deleted'
+  MODERATOR_DELETED: 'moderator_deleted',
+  EXPIRED: 'expired'
 } as const;
 
 export type MessageDeletionReason =
   (typeof MESSAGE_DELETION_REASON)[keyof typeof MESSAGE_DELETION_REASON];
 
+// Source of `expiresAt`. Only `send_time` is implemented today — `read_time`
+// is stubbed so the field can change later without a migration.
+export const MESSAGE_EXPIRATION_POLICY = {
+  SEND_TIME: 'send_time'
+} as const;
+
+export type MessageExpirationPolicy =
+  (typeof MESSAGE_EXPIRATION_POLICY)[keyof typeof MESSAGE_EXPIRATION_POLICY];
+
+// Default cleanup batch size and idle interval. Kept small so a sweep on a
+// single instance never holds a long-running cursor; production tuning can
+// override via env later.
+export const DISAPPEARING_CLEANUP_BATCH_SIZE = 200;
+
 export interface MessageDto {
   id: string;
   conversationId: string;
   senderId: string;
-  // null when the message has been deleted — the original body stays in the
-  // DB for moderation/audit but is never returned to API clients.
+  // null when the message has been deleted OR expired — the original body
+  // stays in the DB for moderation/audit but is never returned to API clients.
   text: string | null;
   replyToMessageId?: string;
   editedAt?: string;
   deletedAt?: string;
   deletedBy?: string;
   deletionReason?: MessageDeletionReason;
+  expiresAt?: string;
+  expiredAt?: string;
+  expirationPolicy?: MessageExpirationPolicy;
   createdAt: string;
   updatedAt: string;
 }

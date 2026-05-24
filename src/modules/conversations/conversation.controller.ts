@@ -8,6 +8,7 @@ import type {
   CreateGroupConversationInput,
   ListConversationsQuery,
   UpdateConversationInput,
+  UpdateDisappearingMessagesInput,
   UpdateMemberRoleInput,
   UpdatePreferencesInput,
   UpdateReadPointerInput
@@ -154,4 +155,18 @@ export const updatePreferencesHandler = async (
     input
   );
   ok(res, { membership });
+};
+
+export const updateDisappearingMessagesHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const actor = requireActor(req);
+  const input = req.body as UpdateDisappearingMessagesInput;
+  const conversation = await conversationService.setDisappearingMessages(
+    actor,
+    req.params.conversationId,
+    input
+  );
+  ok(res, { conversation });
 };

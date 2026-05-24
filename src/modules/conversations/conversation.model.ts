@@ -3,11 +3,14 @@ import {
   CONVERSATION_SETTINGS_WHO_CAN_SEND,
   CONVERSATION_TYPE,
   DEFAULT_CONVERSATION_SETTINGS,
+  DEFAULT_DISAPPEARING_SETTINGS,
+  DISAPPEARING_MESSAGE_DURATIONS,
   GROUP_TITLE_MAX_LENGTH,
   type ConversationDto,
   type ConversationLastMessageDto,
   type ConversationSettings,
-  type ConversationType
+  type ConversationType,
+  type DisappearingMessageSettings
 } from './conversation.types';
 
 export interface ConversationLastMessage {
@@ -15,6 +18,18 @@ export interface ConversationLastMessage {
   senderId: Types.ObjectId;
   preview: string;
   sentAt: Date;
+}
+
+export interface ConversationDisappearingMessages {
+  duration: DisappearingMessageSettings['duration'];
+  durationSeconds: number;
+  updatedBy?: Types.ObjectId;
+  updatedAt?: Date;
+}
+
+export interface ConversationStoredSettings {
+  whoCanSendMessages: ConversationSettings['whoCanSendMessages'];
+  disappearingMessages: ConversationDisappearingMessages;
 }
 
 export interface ConversationAttrs {
@@ -27,7 +42,7 @@ export interface ConversationAttrs {
   // a separate dedup query.
   directKey?: string;
   lastMessage?: ConversationLastMessage;
-  settings: ConversationSettings;
+  settings: ConversationStoredSettings;
 }
 
 export interface ConversationDocument
@@ -53,17 +68,35 @@ const lastMessageSchema = new Schema<ConversationLastMessage>(
   { _id: false }
 );
 
-const settingsSchema = new Schema<ConversationSettings>(
-  {
-    whoCanSendMessages: {
-      type: String,
-      enum: [...CONVERSATION_SETTINGS_WHO_CAN_SEND],
-      default: DEFAULT_CONVERSATION_SETTINGS.whoCanSendMessages,
-      required: true
-    }
+// Settings live as an inline nested schema on the parent. We keep the
+// definition object out of the parent literal only to keep it readable.
+const settingsSchemaDefinition = {
+  whoCanSendMessages: {
+    type: String,
+    enum: [...CONVERSATION_SETTINGS_WHO_CAN_SEND],
+    default: DEFAULT_CONVERSATION_SETTINGS.whoCanSendMessages,
+    required: true
   },
-  { _id: false }
-);
+  disappearingMessages: {
+    duration: {
+      type: String,
+      enum: [...DISAPPEARING_MESSAGE_DURATIONS],
+      default: DEFAULT_DISAPPEARING_SETTINGS.duration,
+      required: true
+    },
+    // Mirrors `duration` (0 when duration === 'off'). Kept here so the
+    // message-send path can pick up the value with the conversation fetch
+    // it already does, without re-mapping the enum on every write.
+    durationSeconds: {
+      type: Number,
+      default: DEFAULT_DISAPPEARING_SETTINGS.durationSeconds,
+      required: true,
+      min: 0
+    },
+    updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    updatedAt: { type: Date }
+  }
+} as const;
 
 const conversationSchema = new Schema<ConversationDocument>(
   {
@@ -85,11 +118,7 @@ const conversationSchema = new Schema<ConversationDocument>(
       index: { unique: true, sparse: true }
     },
     lastMessage: { type: lastMessageSchema },
-    settings: {
-      type: settingsSchema,
-      default: () => ({ ...DEFAULT_CONVERSATION_SETTINGS }),
-      required: true
-    }
+    settings: settingsSchemaDefinition
   },
   { timestamps: true, strict: 'throw' }
 );
@@ -107,13 +136,28 @@ const resolveSettings = (
   doc: ConversationDocument
 ): ConversationSettings => {
   const stored = doc.settings as unknown as
-    | (ConversationSettings & { toObject?: () => ConversationSettings })
+    | (ConversationStoredSettings & {
+        toObject?: () => ConversationStoredSettings;
+      })
     | undefined;
   const plain = stored?.toObject ? stored.toObject() : stored;
+  const dm = plain?.disappearingMessages;
+  const disappearingDto: DisappearingMessageSettings = {
+    duration: dm?.duration ?? DEFAULT_DISAPPEARING_SETTINGS.duration,
+    durationSeconds:
+      dm?.durationSeconds ?? DEFAULT_DISAPPEARING_SETTINGS.durationSeconds
+  };
+  if (dm?.updatedBy) {
+    disappearingDto.updatedBy = dm.updatedBy.toString();
+  }
+  if (dm?.updatedAt) {
+    disappearingDto.updatedAt = dm.updatedAt.toISOString();
+  }
   return {
     whoCanSendMessages:
       plain?.whoCanSendMessages ??
-      DEFAULT_CONVERSATION_SETTINGS.whoCanSendMessages
+      DEFAULT_CONVERSATION_SETTINGS.whoCanSendMessages,
+    disappearingMessages: disappearingDto
   };
 };
 

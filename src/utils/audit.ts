@@ -35,6 +35,19 @@ export interface PermissionChangeEvent {
   reason?: string;
 }
 
+export interface DisappearingMessagesChangeEvent {
+  conversationId: string;
+  conversationType: 'direct' | 'group';
+  previousDuration: string;
+  newDuration: string;
+}
+
+export interface MessageExpiredNowEvent {
+  conversationId: string;
+  messageId: string;
+  reason: 'owner' | 'moderator';
+}
+
 const auditEvent = (
   event: string,
   ctx: AuditContext,
@@ -66,4 +79,18 @@ export const auditPermissionChange = (
   event: PermissionChangeEvent
 ): void => {
   auditEvent('user.permissions.change', ctx, { ...event });
+};
+
+export const auditDisappearingMessagesChange = (
+  ctx: AuditContext,
+  event: DisappearingMessagesChangeEvent
+): void => {
+  auditEvent('conversation.disappearing_messages.change', ctx, { ...event });
+};
+
+export const auditMessageExpiredNow = (
+  ctx: AuditContext,
+  event: MessageExpiredNowEvent
+): void => {
+  auditEvent('message.expired_now', ctx, { ...event });
 };

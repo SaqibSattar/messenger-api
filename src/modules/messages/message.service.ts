@@ -5,6 +5,7 @@ import {
   ForbiddenError,
   NotFoundError
 } from '../../utils/errors';
+import { auditMessageExpiredNow } from '../../utils/audit';
 import { emitRealtime } from '../../services/realtimeEvents';
 import {
   Conversation,
@@ -33,6 +34,7 @@ import {
 } from './messageReaction.model';
 import {
   MESSAGE_DELETION_REASON,
+  MESSAGE_EXPIRATION_POLICY,
   MESSAGE_PREVIEW_MAX_LENGTH,
   type ListMessagesResult,
   type MessageDto,
@@ -192,6 +194,19 @@ export const sendMessage = async (
     }
   }
 
+  // Disappearing-message stamp at send time. Reading the value off the
+  // conversation we already fetched avoids a second round-trip and means the
+  // expiration tracks the setting the sender last saw — flipping the setting
+  // mid-conversation doesn't retroactively change old messages.
+  const dm = conv.settings.disappearingMessages;
+  const expirationFields =
+    dm.duration !== 'off' && dm.durationSeconds > 0
+      ? {
+          expiresAt: new Date(Date.now() + dm.durationSeconds * 1000),
+          expirationPolicy: MESSAGE_EXPIRATION_POLICY.SEND_TIME
+        }
+      : {};
+
   const msg = await Message.create({
     conversationId: conv._id,
     senderId: toObjectId(actor.id),
@@ -199,7 +214,8 @@ export const sendMessage = async (
     attachments: [],
     ...(input.replyToMessageId
       ? { replyToMessageId: toObjectId(input.replyToMessageId) }
-      : {})
+      : {}),
+    ...expirationFields
   });
 
   await updateConversationLastMessage(conv, msg);
@@ -499,3 +515,73 @@ export const markRead = (
   actor: AuthenticatedActor,
   messageId: string
 ): Promise<MessageReceiptDto> => upsertReceipt(actor, messageId, 'read');
+
+// ---------------------------------------------------------------------------
+// Force-expire a single message (owner or platform moderator)
+// ---------------------------------------------------------------------------
+
+export const expireMessageNow = async (
+  actor: AuthenticatedActor,
+  messageId: string
+): Promise<MessageDto> => {
+  const msg = await fetchMessageOr404(messageId);
+
+  if (msg.deletedAt) {
+    // Already redacted — emit nothing, but return the masked DTO so the
+    // client gets a consistent shape.
+    return toMessageDto(msg);
+  }
+  if (msg.expiredAt) {
+    return toMessageDto(msg);
+  }
+
+  const isSender = msg.senderId.toString() === actor.id;
+  const isMod = actorIsModerator(actor);
+
+  if (isSender) {
+    // Reuse the standard self-delete permission — there is no separate
+    // "expire-own" permission and a sender who can delete can clearly choose
+    // to expire it instead.
+    if (!actor.permissions.includes(PERMISSIONS.MESSAGE_DELETE_OWN)) {
+      throw new ForbiddenError('You cannot expire this message');
+    }
+  } else if (!isMod) {
+    throw new ForbiddenError('You cannot expire this message');
+  }
+
+  // Non-moderator callers must still be active members of the conversation.
+  const conversationId = msg.conversationId.toString();
+  if (!isMod) {
+    const membership = await findActiveMembership(conversationId, actor.id);
+    if (!membership) throw new NotFoundError('Message not found');
+  }
+
+  const now = new Date();
+  msg.text = '';
+  msg.expiredAt = now;
+  // Stamp expiresAt so the cleanup job's filter "expiresAt set, expiredAt
+  // missing" doesn't pick this up — and so the DTO carries a deterministic
+  // expiry timestamp for clients.
+  if (!msg.expiresAt) msg.expiresAt = now;
+  msg.deletedAt = now;
+  msg.deletedBy = toObjectId(actor.id);
+  msg.deletionReason = MESSAGE_DELETION_REASON.EXPIRED;
+  await msg.save();
+
+  auditMessageExpiredNow(
+    { actorId: actor.id },
+    {
+      conversationId,
+      messageId: (msg._id as Types.ObjectId).toString(),
+      reason: isMod && !isSender ? 'moderator' : 'owner'
+    }
+  );
+
+  const dto = toMessageDto(msg);
+  emitRealtime('message.expired', {
+    conversationId,
+    messageId: dto.id,
+    message: dto
+  });
+  return dto;
+};

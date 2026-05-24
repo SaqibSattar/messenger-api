@@ -152,6 +152,58 @@ export const assertCanUpdateConversationSettings = (
   }
 };
 
+// Disappearing-messages authorization. Two layers, applied per chat type:
+//
+//   - Direct: any active member with `message:disappearing:manage_own` can
+//     flip the setting. Matches the product rule that direct participants
+//     own their own privacy controls.
+//
+//   - Group: must be an active member, AND either (a) hold the platform-level
+//     `message:disappearing:manage_group` permission (typical bypass for
+//     platform admins/super-admins), or (b) hold an admin/owner role inside
+//     the conversation itself. The role check is the privacy-critical one —
+//     a regular group member cannot flip the setting for the whole group
+//     even if they somehow acquired the platform permission.
+//
+// Platform moderators do NOT bypass this — disappearing-messages is a privacy
+// control, not a moderation action; a mod has no business changing it for
+// other users.
+export const assertCanManageDisappearingMessages = (
+  membership: ConversationMembershipLike | null | undefined,
+  actor: AuthenticatedActor,
+  conversationId: string,
+  conversationType: 'direct' | 'group'
+): void => {
+  if (
+    !membership ||
+    !idEq(membership.userId, actor.id) ||
+    !idEq(membership.conversationId, conversationId) ||
+    !membershipIsActive(membership)
+  ) {
+    throw new ForbiddenError('Not a member of this conversation');
+  }
+
+  if (conversationType === 'direct') {
+    if (!actorHas(actor, PERMISSIONS.MESSAGE_DISAPPEARING_MANAGE_OWN)) {
+      throw new ForbiddenError(
+        'You cannot manage disappearing messages in this conversation'
+      );
+    }
+    return;
+  }
+
+  const hasPlatformBypass = actorHas(
+    actor,
+    PERMISSIONS.MESSAGE_DISAPPEARING_MANAGE_GROUP
+  );
+  const isGroupAdmin = CONVERSATION_ADMIN_ROLES.includes(membership.role);
+  if (!hasPlatformBypass && !isGroupAdmin) {
+    throw new ForbiddenError(
+      'Only group admins can manage disappearing messages'
+    );
+  }
+};
+
 export interface ConversationContext {
   conversationId: string | { toString(): string };
   membership: ConversationMembershipLike | null | undefined;

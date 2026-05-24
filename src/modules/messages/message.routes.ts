@@ -10,6 +10,7 @@ import {
   addReactionHandler,
   deleteMessageHandler,
   editMessageHandler,
+  expireMessageNowHandler,
   getMessageHandler,
   listMessagesHandler,
   markDeliveredHandler,
@@ -119,4 +120,14 @@ messageRouter.post(
   '/:messageId/read',
   validate(messageIdParamSchema, 'params'),
   asyncHandler(markReadHandler)
+);
+
+// Force-expire one message. Only the sender (with delete-own) or a platform
+// moderator can hit this — service enforces the rule. Limiter is tight: this
+// is an admin/owner cleanup tool, not a hot path.
+messageRouter.post(
+  '/:messageId/expire-now',
+  limiter(30, 60 * 1000),
+  validate(messageIdParamSchema, 'params'),
+  asyncHandler(expireMessageNowHandler)
 );

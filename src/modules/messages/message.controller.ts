@@ -124,3 +124,15 @@ export const markReadHandler = async (
   const receipt = await messageService.markRead(actor, req.params.messageId);
   ok(res, { receipt });
 };
+
+export const expireMessageNowHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const actor = requireActor(req);
+  const message = await messageService.expireMessageNow(
+    actor,
+    req.params.messageId
+  );
+  ok(res, { message });
+};

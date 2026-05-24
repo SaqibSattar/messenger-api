@@ -3,6 +3,7 @@ import {
   ADD_MEMBERS_MAX_PER_REQUEST,
   CONVERSATION_MEMBER_ROLE,
   CONVERSATION_SETTINGS_WHO_CAN_SEND,
+  DISAPPEARING_MESSAGE_DURATIONS,
   GROUP_MAX_MEMBERS,
   GROUP_TITLE_MAX_LENGTH,
   GROUP_TITLE_MIN_LENGTH,
@@ -127,6 +128,12 @@ export const updateReadPointerSchema = z
   })
   .strict();
 
+export const updateDisappearingMessagesSchema = z
+  .object({
+    duration: z.enum(DISAPPEARING_MESSAGE_DURATIONS)
+  })
+  .strict();
+
 // `mutedUntil: null` clears the mute, `archived: false` clears archive. Both
 // optional but at least one must be present.
 export const updatePreferencesSchema = z
@@ -173,6 +180,9 @@ export type UpdateConversationInput = z.infer<typeof updateConversationSchema>;
 export type AddMembersInput = z.infer<typeof addMembersSchema>;
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
 export type UpdateReadPointerInput = z.infer<typeof updateReadPointerSchema>;
+export type UpdateDisappearingMessagesInput = z.infer<
+  typeof updateDisappearingMessagesSchema
+>;
 export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>;
 export type ListConversationsQuery = z.infer<
   typeof listConversationsQuerySchema

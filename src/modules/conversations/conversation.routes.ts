@@ -15,6 +15,7 @@ import {
   listConversationsHandler,
   removeMemberHandler,
   updateConversationHandler,
+  updateDisappearingMessagesHandler,
   updateMemberRoleHandler,
   updatePreferencesHandler,
   updateReadPointerHandler
@@ -27,6 +28,7 @@ import {
   createGroupConversationSchema,
   listConversationsQuerySchema,
   updateConversationSchema,
+  updateDisappearingMessagesSchema,
   updateMemberRoleSchema,
   updatePreferencesSchema,
   updateReadPointerSchema
@@ -124,4 +126,18 @@ conversationRouter.patch(
   validate(conversationIdParamSchema, 'params'),
   validate(updatePreferencesSchema),
   asyncHandler(updatePreferencesHandler)
+);
+
+// Disappearing-messages setting. Route-level limiter is tight because
+// flipping the setting is rare and noisy clients trying to spam it should be
+// throttled hard. Permission and role rules are enforced inside the service,
+// not via requirePermission middleware: direct conversations need the
+// member-scoped permission, groups need the group-scoped one, and the
+// resource-level rule is "must actually be a member of this conversation".
+conversationRouter.patch(
+  '/:conversationId/disappearing-messages',
+  limiter(30, 60 * 1000),
+  validate(conversationIdParamSchema, 'params'),
+  validate(updateDisappearingMessagesSchema),
+  asyncHandler(updateDisappearingMessagesHandler)
 );

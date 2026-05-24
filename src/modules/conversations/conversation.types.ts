@@ -30,12 +30,49 @@ export const CONVERSATION_SETTINGS_WHO_CAN_SEND = ['all', 'admins'] as const;
 export type WhoCanSendMessages =
   (typeof CONVERSATION_SETTINGS_WHO_CAN_SEND)[number];
 
+// Disappearing-message durations. Expiration is measured from send time
+// (NOT read time) — keeps the rule simple and avoids leaking when each member
+// read a message via cleanup timing. `off` disables expiration entirely.
+export const DISAPPEARING_MESSAGE_DURATIONS = [
+  'off',
+  '24h',
+  '7d',
+  '30d'
+] as const;
+export type DisappearingMessageDuration =
+  (typeof DISAPPEARING_MESSAGE_DURATIONS)[number];
+
+export const DISAPPEARING_DURATION_SECONDS: Record<
+  Exclude<DisappearingMessageDuration, 'off'>,
+  number
+> = {
+  '24h': 24 * 60 * 60,
+  '7d': 7 * 24 * 60 * 60,
+  '30d': 30 * 24 * 60 * 60
+};
+
 export interface ConversationSettings {
   whoCanSendMessages: WhoCanSendMessages;
+  disappearingMessages: DisappearingMessageSettings;
 }
 
+export interface DisappearingMessageSettings {
+  duration: DisappearingMessageDuration;
+  // Convenience mirror of duration. Stored so writers don't have to recompute
+  // on every send; updated atomically with `duration`.
+  durationSeconds: number;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export const DEFAULT_DISAPPEARING_SETTINGS: DisappearingMessageSettings = {
+  duration: 'off',
+  durationSeconds: 0
+};
+
 export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
-  whoCanSendMessages: 'all'
+  whoCanSendMessages: 'all',
+  disappearingMessages: { ...DEFAULT_DISAPPEARING_SETTINGS }
 };
 
 export interface ConversationLastMessageDto {

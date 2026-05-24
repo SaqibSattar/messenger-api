@@ -1,8 +1,10 @@
 import mongoose, { Schema, type Model, type Types } from 'mongoose';
 import {
   MESSAGE_DELETION_REASON,
+  MESSAGE_EXPIRATION_POLICY,
   type MessageDeletionReason,
-  type MessageDto
+  type MessageDto,
+  type MessageExpirationPolicy
 } from './message.types';
 
 export interface MessageAttrs {
@@ -17,6 +19,12 @@ export interface MessageAttrs {
   deletedAt?: Date;
   deletedBy?: Types.ObjectId;
   deletionReason?: MessageDeletionReason;
+  // Disappearing message bookkeeping. `expiresAt` is set when the message is
+  // created in a conversation that has disappearing messages enabled; the
+  // cleanup job redacts the body and stamps `expiredAt` once that time passes.
+  expiresAt?: Date;
+  expiredAt?: Date;
+  expirationPolicy?: MessageExpirationPolicy;
 }
 
 export interface MessageDocument extends MessageAttrs, mongoose.Document {
@@ -36,7 +44,11 @@ const messageSchema = new Schema<MessageDocument>(
       ref: 'User',
       required: true
     },
-    text: { type: String, required: true, default: '' },
+    // `required: true` would reject empty strings, which we need to write
+    // when a message is expired/redacted by the cleanup job. Send-time
+    // validation already rejects empty input via Zod (see message.validation),
+    // so storing '' is only ever reachable through deliberate redaction.
+    text: { type: String, default: '' },
     attachments: {
       type: [{ type: Schema.Types.ObjectId, ref: 'Attachment' }],
       default: []
@@ -48,6 +60,12 @@ const messageSchema = new Schema<MessageDocument>(
     deletionReason: {
       type: String,
       enum: Object.values(MESSAGE_DELETION_REASON)
+    },
+    expiresAt: { type: Date },
+    expiredAt: { type: Date },
+    expirationPolicy: {
+      type: String,
+      enum: Object.values(MESSAGE_EXPIRATION_POLICY)
     }
   },
   { timestamps: true, strict: 'throw' }
@@ -68,15 +86,29 @@ messageSchema.index(
   { sparse: true }
 );
 
+// Cleanup job query: messages that are scheduled to expire, not yet processed.
+// Sparse keeps non-expiring messages out of the index entirely.
+messageSchema.index(
+  { expiresAt: 1 },
+  { sparse: true, partialFilterExpression: { expiredAt: { $exists: false } } }
+);
+
 export const toMessageDto = (doc: MessageDocument): MessageDto => {
   const id = (doc._id as Types.ObjectId).toString();
+  // A message is considered redacted-from-clients if it's deleted, has been
+  // processed by the expiration job, OR is past its expiresAt window but the
+  // job hasn't run yet. The last case is the load-bearing one: clients must
+  // not see plaintext for an "expired but uncleaned" message, even if a read
+  // races the cleanup sweep.
+  const isExpired =
+    !!doc.expiredAt ||
+    (!!doc.expiresAt && doc.expiresAt.getTime() <= Date.now());
+  const isRedacted = !!doc.deletedAt || isExpired;
   const dto: MessageDto = {
     id,
     conversationId: doc.conversationId.toString(),
     senderId: doc.senderId.toString(),
-    // Deleted messages must not leak their original text via the API. The
-    // raw body stays on disk for audit/moderation but is not serialised.
-    text: doc.deletedAt ? null : doc.text,
+    text: isRedacted ? null : doc.text,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString()
   };
@@ -87,6 +119,9 @@ export const toMessageDto = (doc: MessageDocument): MessageDto => {
   if (doc.deletedAt) dto.deletedAt = doc.deletedAt.toISOString();
   if (doc.deletedBy) dto.deletedBy = doc.deletedBy.toString();
   if (doc.deletionReason) dto.deletionReason = doc.deletionReason;
+  if (doc.expiresAt) dto.expiresAt = doc.expiresAt.toISOString();
+  if (doc.expiredAt) dto.expiredAt = doc.expiredAt.toISOString();
+  if (doc.expirationPolicy) dto.expirationPolicy = doc.expirationPolicy;
   return dto;
 };
 

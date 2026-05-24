@@ -5,10 +5,13 @@ import {
   ForbiddenError,
   NotFoundError
 } from '../../utils/errors';
+import { auditDisappearingMessagesChange } from '../../utils/audit';
+import { emitRealtime } from '../../services/realtimeEvents';
 import { User } from '../users/user.model';
 import { USER_STATUS } from '../users/user.types';
 import {
   assertCanManageConversationMembers,
+  assertCanManageDisappearingMessages,
   assertCanUpdateConversationSettings,
   assertConversationMembership,
   type AuthenticatedActor
@@ -29,9 +32,11 @@ import {
   CONVERSATION_MEMBER_ROLE,
   CONVERSATION_TYPE,
   DEFAULT_CONVERSATION_SETTINGS,
+  DISAPPEARING_DURATION_SECONDS,
   GROUP_MAX_MEMBERS,
   type ConversationDto,
   type ConversationMemberDto,
+  type DisappearingMessageDuration,
   type MyConversationDto
 } from './conversation.types';
 import type {
@@ -40,6 +45,7 @@ import type {
   CreateGroupConversationInput,
   ListConversationsQuery,
   UpdateConversationInput,
+  UpdateDisappearingMessagesInput,
   UpdateMemberRoleInput,
   UpdatePreferencesInput,
   UpdateReadPointerInput
@@ -659,6 +665,78 @@ export const updateReadPointer = async (
   membership.lastReadMessageId = next;
   await membership.save();
   return toConversationMemberDto(membership);
+};
+
+// ---------------------------------------------------------------------------
+// Disappearing messages
+// ---------------------------------------------------------------------------
+
+const durationToSeconds = (
+  duration: DisappearingMessageDuration
+): number =>
+  duration === 'off' ? 0 : DISAPPEARING_DURATION_SECONDS[duration];
+
+export const setDisappearingMessages = async (
+  actor: AuthenticatedActor,
+  conversationId: string,
+  input: UpdateDisappearingMessagesInput
+): Promise<ConversationDto> => {
+  const conv = await fetchConversationOr404(conversationId);
+  const membership = await findActiveMembership(conversationId, actor.id);
+
+  // Resource-level membership check first. We pass through to the dedicated
+  // disappearing-messages helper because platform-moderator bypass is wrong
+  // here — privacy controls must remain in the hands of conversation members.
+  if (!membership) {
+    throw new NotFoundError('Conversation not found');
+  }
+
+  assertCanManageDisappearingMessages(
+    membership,
+    actor,
+    conversationId,
+    conv.type === CONVERSATION_TYPE.GROUP ? 'group' : 'direct'
+  );
+
+  const previousDuration = conv.settings.disappearingMessages.duration;
+  if (previousDuration === input.duration) {
+    // No-op: skip writes and the audit/realtime fan-out so a noisy client
+    // can't spam events by re-sending the same value.
+    return toConversationDto(conv);
+  }
+
+  conv.settings.disappearingMessages = {
+    duration: input.duration,
+    durationSeconds: durationToSeconds(input.duration),
+    updatedBy: toObjectId(actor.id),
+    updatedAt: new Date()
+  };
+  // Mongoose needs to know the nested doc was replaced.
+  conv.markModified('settings.disappearingMessages');
+  await conv.save();
+
+  const dto = toConversationDto(conv);
+
+  // Audit trail (group changes are the load-bearing case, but logging direct
+  // ones too gives moderators a record for incident response). Reason and
+  // body are intentionally absent from the log — the change is metadata-only.
+  auditDisappearingMessagesChange(
+    { actorId: actor.id },
+    {
+      conversationId,
+      conversationType:
+        conv.type === CONVERSATION_TYPE.GROUP ? 'group' : 'direct',
+      previousDuration,
+      newDuration: input.duration
+    }
+  );
+
+  emitRealtime('conversation.disappearing_settings_updated', {
+    conversationId,
+    disappearingMessages: dto.settings.disappearingMessages
+  });
+
+  return dto;
 };
 
 export const updatePreferences = async (
