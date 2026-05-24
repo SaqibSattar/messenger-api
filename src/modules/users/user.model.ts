@@ -5,27 +5,49 @@ import {
   type Permission,
   type Role
 } from '../permissions/permissions.constants';
-import { USER_STATUS, type UserDto, type UserStatus } from './user.types';
+import {
+  DEFAULT_PRIVACY_SETTINGS,
+  USER_STATUS,
+  type PrivacySettings,
+  type PublicUserDto,
+  type UserDto,
+  type UserStatus
+} from './user.types';
 
 export interface UserAttrs {
   email?: string;
   phone?: string;
+  username?: string;
   passwordHash: string;
   displayName: string;
   avatarUrl?: string;
+  bio?: string;
   role: Role;
   customPermissions: Permission[];
   status: UserStatus;
+  privacySettings: PrivacySettings;
   emailVerifiedAt?: Date;
   phoneVerifiedAt?: Date;
   lastLoginAt?: Date;
   passwordChangedAt?: Date;
+  deactivatedAt?: Date;
 }
 
 export interface UserDocument extends UserAttrs, mongoose.Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+const privacySchema = new Schema<PrivacySettings>(
+  {
+    discoverableByEmail: { type: Boolean, default: true },
+    discoverableByPhone: { type: Boolean, default: true },
+    discoverableByUsername: { type: Boolean, default: true },
+    showLastSeen: { type: Boolean, default: true },
+    showOnlineStatus: { type: Boolean, default: true }
+  },
+  { _id: false }
+);
 
 const userSchema = new Schema<UserDocument>(
   {
@@ -40,9 +62,18 @@ const userSchema = new Schema<UserDocument>(
       trim: true,
       index: { unique: true, sparse: true }
     },
+    username: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      minlength: 3,
+      maxlength: 30,
+      index: { unique: true, sparse: true }
+    },
     passwordHash: { type: String, required: true, select: false },
     displayName: { type: String, required: true, trim: true, maxlength: 80 },
-    avatarUrl: { type: String, trim: true },
+    avatarUrl: { type: String, trim: true, maxlength: 2048 },
+    bio: { type: String, trim: true, maxlength: 280 },
     role: {
       type: String,
       enum: Object.values(ROLES),
@@ -64,10 +95,15 @@ const userSchema = new Schema<UserDocument>(
       default: USER_STATUS.ACTIVE,
       required: true
     },
+    privacySettings: {
+      type: privacySchema,
+      default: () => ({ ...DEFAULT_PRIVACY_SETTINGS })
+    },
     emailVerifiedAt: { type: Date },
     phoneVerifiedAt: { type: Date },
     lastLoginAt: { type: Date },
-    passwordChangedAt: { type: Date, select: false }
+    passwordChangedAt: { type: Date, select: false },
+    deactivatedAt: { type: Date }
   },
   { timestamps: true, strict: 'throw' }
 );
@@ -82,18 +118,43 @@ userSchema.set('toJSON', {
   }
 });
 
+const resolvePrivacy = (user: UserDocument): PrivacySettings => {
+  // user.privacySettings is a Mongoose subdocument; spread it as a plain
+  // object so the DTO does not leak `$__`, `_doc`, etc.
+  const stored = (user.privacySettings as unknown) as
+    | (PrivacySettings & { toObject?: () => PrivacySettings })
+    | undefined;
+  const plain = stored?.toObject ? stored.toObject() : stored;
+  return {
+    discoverableByEmail:
+      plain?.discoverableByEmail ?? DEFAULT_PRIVACY_SETTINGS.discoverableByEmail,
+    discoverableByPhone:
+      plain?.discoverableByPhone ?? DEFAULT_PRIVACY_SETTINGS.discoverableByPhone,
+    discoverableByUsername:
+      plain?.discoverableByUsername ??
+      DEFAULT_PRIVACY_SETTINGS.discoverableByUsername,
+    showLastSeen:
+      plain?.showLastSeen ?? DEFAULT_PRIVACY_SETTINGS.showLastSeen,
+    showOnlineStatus:
+      plain?.showOnlineStatus ?? DEFAULT_PRIVACY_SETTINGS.showOnlineStatus
+  };
+};
+
 export const toUserDto = (user: UserDocument): UserDto => {
   const dto: UserDto = {
     id: (user._id as mongoose.Types.ObjectId).toString(),
     displayName: user.displayName,
     role: user.role,
     status: user.status,
+    privacySettings: resolvePrivacy(user),
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString()
   };
   if (user.email) dto.email = user.email;
   if (user.phone) dto.phone = user.phone;
+  if (user.username) dto.username = user.username;
   if (user.avatarUrl) dto.avatarUrl = user.avatarUrl;
+  if (user.bio) dto.bio = user.bio;
   if (user.customPermissions && user.customPermissions.length > 0) {
     dto.customPermissions = [...user.customPermissions];
   }
@@ -102,6 +163,21 @@ export const toUserDto = (user: UserDocument): UserDto => {
   if (user.phoneVerifiedAt)
     dto.phoneVerifiedAt = user.phoneVerifiedAt.toISOString();
   if (user.lastLoginAt) dto.lastLoginAt = user.lastLoginAt.toISOString();
+  if (user.deactivatedAt) dto.deactivatedAt = user.deactivatedAt.toISOString();
+  return dto;
+};
+
+// Lean projection safe to expose to other users. Must never include email,
+// phone, role, status, privacy settings, or any login/activity metadata.
+export const toPublicUserDto = (user: UserDocument): PublicUserDto => {
+  const dto: PublicUserDto = {
+    id: (user._id as mongoose.Types.ObjectId).toString(),
+    displayName: user.displayName,
+    createdAt: user.createdAt.toISOString()
+  };
+  if (user.username) dto.username = user.username;
+  if (user.avatarUrl) dto.avatarUrl = user.avatarUrl;
+  if (user.bio) dto.bio = user.bio;
   return dto;
 };
 
