@@ -25,7 +25,13 @@ import { PERMISSIONS } from '../permissions/permissions.constants';
 import { Attachment } from '../media/attachment.model';
 import { attachToMessage } from '../media/media.service';
 import { ATTACHMENT_STATUS } from '../media/media.types';
+import { User } from '../users/user.model';
 import { isBlockedBetween } from '../moderation/block.service';
+import { createNotification } from '../notifications/notification.service';
+import {
+  NOTIFICATION_ENTITY_TYPE,
+  NOTIFICATION_TYPE
+} from '../notifications/notification.types';
 import { Message, toMessageDto, type MessageDocument } from './message.model';
 import {
   MessageReceipt,
@@ -320,7 +326,100 @@ export const sendMessage = async (
     conversationId: dto.conversationId,
     message: dto
   });
+
+  // Notify other active members. Best-effort: a notification failure must
+  // not roll the message back — the inbox row is convenience metadata; the
+  // canonical event is the message itself.
+  await fanOutMessageNotifications(actor, conv, msg, dto.text ?? '').catch(() => {
+    /* swallowed; logged inside the helper */
+  });
+
   return dto;
+};
+
+// Build inbox + push notifications for every other member of the
+// conversation. Membership is the authorization gate — only members of a
+// conversation can be members for notification purposes, so a leaked
+// conversationId in the input never produces notifications for a non-member.
+const fanOutMessageNotifications = async (
+  actor: AuthenticatedActor,
+  conv: ConversationDocument,
+  msg: MessageDocument,
+  text: string
+): Promise<void> => {
+  // Active recipients = members who have not left, excluding the sender.
+  const recipients = await ConversationMember.find({
+    conversationId: conv._id,
+    userId: { $ne: toObjectId(actor.id) },
+    leftAt: { $exists: false }
+  }).select('userId mutedUntil');
+  if (recipients.length === 0) return;
+
+  // Build a displayable title up front. We never fall back to "Someone"
+  // silently — if the sender's user document is gone, skip the fan-out so
+  // we don't write a row that pretends to know the sender.
+  const sender = await User.findById(actor.id).select('displayName');
+  if (!sender) return;
+  const senderName = sender.displayName;
+
+  const conversationTitle =
+    conv.type === 'group' && conv.title ? conv.title : null;
+
+  const messageId = (msg._id as Types.ObjectId).toString();
+  const conversationId = conv._id.toString();
+
+  const now = new Date();
+
+  // Fan out per-recipient. Each recipient's ConversationMember.mutedUntil
+  // controls whether the push payload is suppressed — the inbox row is
+  // always written so the user can scroll back. The notification service
+  // additionally honors NotificationPreference.mutedConversationIds inside
+  // createNotification, so a recipient can mute push for a conversation
+  // independently of the inbox-mute setting.
+  for (const m of recipients) {
+    const isMutedByMember = !!m.mutedUntil && m.mutedUntil > now;
+    await createNotification(
+      {
+        userId: m.userId.toString(),
+        type: NOTIFICATION_TYPE.MESSAGE_RECEIVED,
+        title: conversationTitle
+          ? `${senderName} in ${conversationTitle}`
+          : senderName,
+        // Body preview is the message text. The notification model clips
+        // it; attachment-only messages produce an empty preview which the
+        // model drops, so the inbox row is built around the title.
+        bodyPreview: text.length > 0 ? text : undefined,
+        entityType: NOTIFICATION_ENTITY_TYPE.MESSAGE,
+        entityId: messageId,
+        conversationId,
+        data: { senderId: actor.id }
+      },
+      { skipPush: isMutedByMember }
+    );
+  }
+};
+
+// Notify the author of a message when someone reacts to it. Skipped when
+// the reactor is the author themselves (self-reactions are uncommon but
+// possible; either way, you don't need to be told about your own reaction).
+const notifyMessageAuthorOfReaction = async (
+  actor: AuthenticatedActor,
+  msg: MessageDocument,
+  emoji: string
+): Promise<void> => {
+  const authorId = msg.senderId.toString();
+  if (authorId === actor.id) return;
+  const reactor = await User.findById(actor.id).select('displayName');
+  if (!reactor) return;
+  await createNotification({
+    userId: authorId,
+    type: NOTIFICATION_TYPE.MESSAGE_REACTION,
+    title: `${reactor.displayName} reacted ${emoji}`,
+    entityType: NOTIFICATION_ENTITY_TYPE.MESSAGE,
+    entityId: (msg._id as Types.ObjectId).toString(),
+    conversationId: msg.conversationId.toString(),
+    data: { reactorId: actor.id, emoji }
+  });
 };
 
 // ---------------------------------------------------------------------------
@@ -489,6 +588,10 @@ export const addReaction = async (
       conversationId,
       messageId: dto.messageId,
       reaction: dto
+    });
+    // Best-effort: a notification failure must not undo the reaction.
+    await notifyMessageAuthorOfReaction(actor, msg, dto.emoji).catch(() => {
+      /* swallowed; the reaction itself succeeded */
     });
     return dto;
   } catch (err) {

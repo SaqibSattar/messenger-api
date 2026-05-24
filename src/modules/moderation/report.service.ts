@@ -15,6 +15,11 @@ import {
   type AuthenticatedActor
 } from '../permissions/authorization';
 import { PERMISSIONS } from '../permissions/permissions.constants';
+import { createNotification } from '../notifications/notification.service';
+import {
+  NOTIFICATION_ENTITY_TYPE,
+  NOTIFICATION_TYPE
+} from '../notifications/notification.types';
 import { User } from '../users/user.model';
 import { USER_STATUS } from '../users/user.types';
 import { Conversation } from '../conversations/conversation.model';
@@ -236,6 +241,24 @@ export const updateReportStatus = async (
     // present. Persistent storage of the note lands with the broader audit
     // collection in prompt 10.
     hasNote: Boolean(input.note)
+  });
+
+  // Notify the reporter that their report moved forward. Best-effort: a
+  // notification failure must not undo the status change. The notification
+  // payload never carries the reviewer's note — that field is sensitive
+  // and stays inside the persistent report record for reviewer eyes only.
+  await createNotification({
+    userId: report.reporterId.toString(),
+    type: NOTIFICATION_TYPE.REPORT_STATUS_CHANGED,
+    title: `Your report is ${input.status}`,
+    entityType: NOTIFICATION_ENTITY_TYPE.REPORT,
+    entityId: (report._id as Types.ObjectId).toString(),
+    data: {
+      previousStatus,
+      newStatus: input.status
+    }
+  }).catch(() => {
+    /* swallowed; the status change itself succeeded */
   });
 
   return toReportDto(report);

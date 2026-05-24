@@ -26,6 +26,11 @@ import {
   moderationRouter,
   reportRouter
 } from './modules/moderation/moderation.routes';
+import {
+  notificationPreferencesRouter,
+  notificationRouter
+} from './modules/notifications/notification.routes';
+import { searchRouter } from './modules/search/search.routes';
 
 export const buildApp = (): Express => {
   const app = express();
@@ -89,6 +94,9 @@ export const buildApp = (): Express => {
   app.use('/api/v1/blocks', blockRouter);
   app.use('/api/v1/reports', reportRouter);
   app.use('/api/v1/moderation', moderationRouter);
+  app.use('/api/v1/search', searchRouter);
+  app.use('/api/v1/notifications', notificationRouter);
+  app.use('/api/v1/notification-preferences', notificationPreferencesRouter);
   app.use('/api/v1/admin', adminRouter);
 
   app.use(notFound);

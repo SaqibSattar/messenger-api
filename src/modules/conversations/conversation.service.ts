@@ -18,6 +18,11 @@ import {
 } from '../permissions/authorization';
 import { PERMISSIONS } from '../permissions/permissions.constants';
 import { isBlockedBetween } from '../moderation/block.service';
+import { createNotification } from '../notifications/notification.service';
+import {
+  NOTIFICATION_ENTITY_TYPE,
+  NOTIFICATION_TYPE
+} from '../notifications/notification.types';
 import {
   Conversation,
   buildDirectKey,
@@ -499,6 +504,28 @@ export const addMembers = async (
       role: CONVERSATION_MEMBER_ROLE.MEMBER
     });
     added.push(created);
+  }
+
+  // Notify each newly added member that they were added to the group. We
+  // use the conversation title only when it exists — direct chats never
+  // go through this code path, so the title is reliably set. Best-effort:
+  // a notification failure must not undo the membership change.
+  const inviteTitle = conv.title
+    ? `You were added to ${conv.title}`
+    : 'You were added to a conversation';
+  const conversationIdStr = conv._id.toString();
+  for (const m of added) {
+    await createNotification({
+      userId: m.userId.toString(),
+      type: NOTIFICATION_TYPE.CONVERSATION_INVITE,
+      title: inviteTitle,
+      entityType: NOTIFICATION_ENTITY_TYPE.CONVERSATION,
+      entityId: conversationIdStr,
+      conversationId: conversationIdStr,
+      data: { invitedBy: actor.id }
+    }).catch(() => {
+      /* swallowed; the membership change itself succeeded */
+    });
   }
 
   return { added: added.map(toConversationMemberDto) };

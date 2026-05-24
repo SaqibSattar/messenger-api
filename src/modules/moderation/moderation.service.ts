@@ -16,6 +16,11 @@ import {
 } from '../sessions/session.model';
 import { Conversation } from '../conversations/conversation.model';
 import { Message } from '../messages/message.model';
+import { createNotification } from '../notifications/notification.service';
+import {
+  NOTIFICATION_ENTITY_TYPE,
+  NOTIFICATION_TYPE
+} from '../notifications/notification.types';
 import {
   ModerationAction,
   toModerationActionDto,
@@ -221,6 +226,24 @@ export const createModerationAction = async (
     hasMetadata:
       action.metadata != null && Object.keys(action.metadata).length > 0
   });
+
+  // Notify the affected user when the action is user-targeted. We only
+  // notify on user-scoped actions; message/conversation deletions don't
+  // page the author directly (the deleted-message DTO already signals
+  // the change). The reason text is intentionally NOT included — only
+  // the kind of action — to avoid leaking the moderator's internal notes.
+  if (action.targetType === MODERATION_TARGET_TYPE.USER) {
+    await createNotification({
+      userId: action.targetId.toString(),
+      type: NOTIFICATION_TYPE.MODERATION_ACTION,
+      title: `Account update: ${action.actionType.replace(/_/g, ' ')}`,
+      entityType: NOTIFICATION_ENTITY_TYPE.MODERATION_ACTION,
+      entityId: (action._id as Types.ObjectId).toString(),
+      data: { actionType: action.actionType }
+    }).catch(() => {
+      /* swallowed; the moderation action itself succeeded */
+    });
+  }
 
   return toModerationActionDto(action);
 };
