@@ -7,6 +7,11 @@ spec and security rules — this README only covers operational concerns.
 For **client integration** (REST routes, socket events, error codes, the
 versioning/deprecation policy), start at [`docs/api/README.md`](docs/api/README.md).
 
+Operational and architecture docs:
+
+- [`docs/PRIVACY_RETENTION.md`](docs/PRIVACY_RETENTION.md) — retention windows, account-deletion flow, what the sweep jobs do.
+- [`docs/E2EE_ARCHITECTURE.md`](docs/E2EE_ARCHITECTURE.md) — proposed end-to-end encryption design. **Not implemented** — design document only, per prompt 17.
+
 ---
 
 ## Quick start (local development)
