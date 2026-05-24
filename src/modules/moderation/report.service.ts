@@ -117,7 +117,7 @@ export const createReport = async (
     status: REPORT_STATUS.OPEN
   });
 
-  auditReportCreated(audit, {
+  await auditReportCreated(audit, {
     reportId: (report._id as Types.ObjectId).toString(),
     targetType: report.targetType,
     targetId: report.targetId.toString(),
@@ -231,15 +231,14 @@ export const updateReportStatus = async (
   }
   await report.save();
 
-  auditReportStatusChanged(audit, {
+  await auditReportStatusChanged(audit, {
     reportId: (report._id as Types.ObjectId).toString(),
     previousStatus,
     newStatus: input.status,
     targetType: report.targetType,
     targetId: report.targetId.toString(),
     // Never log the reviewer's free-text note body — only the fact one was
-    // present. Persistent storage of the note lands with the broader audit
-    // collection in prompt 10.
+    // present. The persistent audit row captures `hasNote: true|false`.
     hasNote: Boolean(input.note)
   });
 

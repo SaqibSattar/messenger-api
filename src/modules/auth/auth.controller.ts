@@ -58,7 +58,7 @@ export const logoutAllHandler = async (
   res: Response
 ): Promise<void> => {
   if (!req.user) throw new UnauthorizedError();
-  const revoked = await authService.logoutAll(req.user.id);
+  const revoked = await authService.logoutAll(req.user.id, requestContext(req));
   ok(res, { revoked });
 };
 
@@ -68,7 +68,7 @@ export const changePasswordHandler = async (
 ): Promise<void> => {
   if (!req.user) throw new UnauthorizedError();
   const input = req.body as ChangePasswordInput;
-  await authService.changePassword(req.user.id, input);
+  await authService.changePassword(req.user.id, input, requestContext(req));
   ok(res, { success: true });
 };
 

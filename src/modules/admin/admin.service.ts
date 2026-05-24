@@ -5,14 +5,24 @@ import {
 } from '../../utils/errors';
 import { auditPermissionChange, auditRoleChange } from '../../utils/audit';
 import type { AuditContext } from '../../utils/audit';
+import { isMongoReady } from '../../db/mongo';
+import { isRedisReady } from '../../db/redis';
 import { User, toUserDto } from '../users/user.model';
+import { USER_STATUS } from '../users/user.types';
 import type { UserDto } from '../users/user.types';
 import {
   Session,
   SESSION_REVOKED_REASON
 } from '../sessions/session.model';
+import { Conversation } from '../conversations/conversation.model';
+import { Message } from '../messages/message.model';
+import { Report } from '../moderation/report.model';
+import { REPORT_STATUS } from '../moderation/report.types';
+import { ModerationAction } from '../moderation/moderationAction.model';
+import { AuditLog } from './auditLog.model';
 import {
   ALL_PERMISSIONS,
+  PERMISSIONS,
   type Permission
 } from '../permissions/permissions.constants';
 import {
@@ -87,7 +97,7 @@ export const updateUserRole = async (
   // state is rebuilt.
   await revokeAllSessions(target._id.toString(), SESSION_REVOKED_REASON.LOGOUT_ALL);
 
-  auditRoleChange(audit, {
+  await auditRoleChange(audit, {
     targetUserId: target._id.toString(),
     previousRole,
     newRole: input.role,
@@ -133,7 +143,7 @@ export const updateUserCustomPermissions = async (
 
   await revokeAllSessions(target._id.toString(), SESSION_REVOKED_REASON.LOGOUT_ALL);
 
-  auditPermissionChange(audit, {
+  await auditPermissionChange(audit, {
     targetUserId: target._id.toString(),
     added,
     removed,
@@ -141,4 +151,92 @@ export const updateUserCustomPermissions = async (
   });
 
   return toUserDto(target);
+};
+
+// ---------------------------------------------------------------------------
+// System summary
+// ---------------------------------------------------------------------------
+//
+// Privacy-safe aggregate view for admin dashboards. Returns only collection
+// counts and 24h activity totals — no user identifiers, no message bodies,
+// no IP addresses. Intended for the admin overview page; large-scale ops
+// metrics live behind the separate `/metrics` endpoint.
+
+export interface SystemSummary {
+  generatedAt: string;
+  uptimeSeconds: number;
+  dependencies: { mongo: boolean; redis: boolean };
+  users: {
+    total: number;
+    active: number;
+    suspended: number;
+    deactivated: number;
+  };
+  conversations: number;
+  messagesLast24h: number;
+  openReports: number;
+  moderationActionsLast24h: number;
+  auditLogsLast24h: number;
+  activeSessions: number;
+}
+
+const MS_24H = 24 * 60 * 60 * 1000;
+
+export const getSystemSummary = async (
+  actor: AuthenticatedActor
+): Promise<SystemSummary> => {
+  // Service-level double check; the route also enforces this.
+  if (!actor.permissions.includes(PERMISSIONS.ADMIN_SYSTEM_READ)) {
+    throw new ForbiddenError('You cannot view system summary');
+  }
+
+  const since = new Date(Date.now() - MS_24H);
+
+  // Run independent counts in parallel — the summary is read-only and cheap.
+  const [
+    totalUsers,
+    activeUsers,
+    suspendedUsers,
+    deactivatedUsers,
+    conversationCount,
+    messagesLast24h,
+    openReports,
+    moderationActionsLast24h,
+    auditLogsLast24h,
+    activeSessions
+  ] = await Promise.all([
+    User.countDocuments({}),
+    User.countDocuments({ status: USER_STATUS.ACTIVE }),
+    User.countDocuments({ status: USER_STATUS.SUSPENDED }),
+    User.countDocuments({ status: USER_STATUS.DEACTIVATED }),
+    Conversation.countDocuments({}),
+    Message.countDocuments({ createdAt: { $gte: since } }),
+    Report.countDocuments({
+      status: { $in: [REPORT_STATUS.OPEN, REPORT_STATUS.REVIEWING] }
+    }),
+    ModerationAction.countDocuments({ createdAt: { $gte: since } }),
+    AuditLog.countDocuments({ createdAt: { $gte: since } }),
+    Session.countDocuments({
+      revokedAt: { $exists: false },
+      expiresAt: { $gt: new Date() }
+    })
+  ]);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    dependencies: { mongo: isMongoReady(), redis: isRedisReady() },
+    users: {
+      total: totalUsers,
+      active: activeUsers,
+      suspended: suspendedUsers,
+      deactivated: deactivatedUsers
+    },
+    conversations: conversationCount,
+    messagesLast24h,
+    openReports,
+    moderationActionsLast24h,
+    auditLogsLast24h,
+    activeSessions
+  };
 };

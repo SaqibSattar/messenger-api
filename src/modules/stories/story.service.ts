@@ -648,7 +648,7 @@ export const deleteStory = async (
     );
   }
 
-  auditStoryRemoved(
+  await auditStoryRemoved(
     { actorId: actor.id },
     {
       storyId: (story._id as Types.ObjectId).toString(),
@@ -720,7 +720,7 @@ export const reportStory = async (
   // log the audit event so the moderation team has a paper trail; the
   // moderation module will additionally persist the record. Never log the
   // report body itself.
-  auditStoryReported(
+  await auditStoryReported(
     { actorId: actor.id },
     {
       storyId: (story._id as Types.ObjectId).toString(),

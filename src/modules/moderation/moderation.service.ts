@@ -214,7 +214,7 @@ export const createModerationAction = async (
       : {})
   });
 
-  auditModerationAction(audit, {
+  await auditModerationAction(audit, {
     actionId: (action._id as Types.ObjectId).toString(),
     actionType: action.actionType,
     targetType: action.targetType,

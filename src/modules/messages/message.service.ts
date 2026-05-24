@@ -775,7 +775,7 @@ export const expireMessageNow = async (
   msg.deletionReason = MESSAGE_DELETION_REASON.EXPIRED;
   await msg.save();
 
-  auditMessageExpiredNow(
+  await auditMessageExpiredNow(
     { actorId: actor.id },
     {
       conversationId,

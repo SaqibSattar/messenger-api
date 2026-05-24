@@ -2,7 +2,9 @@ import type { Request, Response } from 'express';
 import { ok } from '../../utils/apiResponse';
 import { UnauthorizedError } from '../../utils/errors';
 import * as adminService from './admin.service';
+import { listAuditLogs } from './auditLog.service';
 import type {
+  ListAuditLogsQueryInput,
   UpdateCustomPermissionsInput,
   UpdateRoleInput
 } from './admin.validation';
@@ -45,4 +47,32 @@ export const updateUserCustomPermissionsHandler = async (
     auditContext(req)
   );
   ok(res, { user });
+};
+
+export const listAuditLogsHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  if (!req.user) throw new UnauthorizedError();
+  const query = req.query as unknown as ListAuditLogsQueryInput;
+  const { items, nextCursor } = await listAuditLogs(req.user, {
+    cursor: query.cursor,
+    limit: query.limit,
+    actorId: query.actorId,
+    action: query.action,
+    targetType: query.targetType,
+    targetId: query.targetId,
+    since: query.since ? new Date(query.since) : undefined,
+    until: query.until ? new Date(query.until) : undefined
+  });
+  ok(res, { items, nextCursor });
+};
+
+export const getSystemSummaryHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  if (!req.user) throw new UnauthorizedError();
+  const summary = await adminService.getSystemSummary(req.user);
+  ok(res, summary);
 };

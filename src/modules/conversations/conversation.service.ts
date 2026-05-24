@@ -737,7 +737,7 @@ export const setDisappearingMessages = async (
   // Audit trail (group changes are the load-bearing case, but logging direct
   // ones too gives moderators a record for incident response). Reason and
   // body are intentionally absent from the log — the change is metadata-only.
-  auditDisappearingMessagesChange(
+  await auditDisappearingMessagesChange(
     { actorId: actor.id },
     {
       conversationId,

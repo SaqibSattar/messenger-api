@@ -15,6 +15,11 @@ import {
 import { parseTtlSeconds } from '../../utils/ttl';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
+import {
+  auditLoginFailed,
+  auditPasswordChanged,
+  auditSessionsRevokedAll
+} from '../../utils/audit';
 import { User, toUserDto, type UserDocument } from '../users/user.model';
 import { USER_STATUS } from '../users/user.types';
 import {
@@ -32,6 +37,16 @@ import type { AuthResult, AuthTokens, RequestContext } from './auth.types';
 
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id
+};
+
+// Coarse, irreversible hint about a login identifier — surfaces enough for an
+// admin reviewing the audit log to recognise a pattern, but never the full
+// email/phone. We keep the first 2 characters and the length.
+const identifierHint = (raw: string): string => {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return '';
+  const head = trimmed.slice(0, 2);
+  return `${head}***(len=${trimmed.length})`;
 };
 
 const findUserByIdentifier = async (
@@ -145,6 +160,19 @@ export const login = async (
   }
 
   if (!user || !valid) {
+    // Audit the failure with a coarse identifier hint only — we never store
+    // the attempted password or the full email/phone (a packed audit table
+    // must not double as a leak vector for enumerated identifiers).
+    await auditLoginFailed(
+      {
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent
+      },
+      {
+        identifierType: input.email ? 'email' : 'phone',
+        identifierHint: identifierHint(input.email ?? input.phone ?? '')
+      }
+    );
     throw new UnauthorizedError('Invalid credentials');
   }
 
@@ -249,7 +277,10 @@ export const logout = async (refreshToken: string): Promise<void> => {
   await session.save();
 };
 
-export const logoutAll = async (userId: string): Promise<number> => {
+export const logoutAll = async (
+  userId: string,
+  ctx?: RequestContext
+): Promise<number> => {
   const result = await Session.updateMany(
     { userId, revokedAt: { $exists: false } },
     {
@@ -259,12 +290,24 @@ export const logoutAll = async (userId: string): Promise<number> => {
       }
     }
   );
-  return result.modifiedCount ?? 0;
+  const revoked = result.modifiedCount ?? 0;
+  if (revoked > 0) {
+    await auditSessionsRevokedAll(
+      {
+        actorId: userId,
+        ipAddress: ctx?.ipAddress,
+        userAgent: ctx?.userAgent
+      },
+      { userId, revokedCount: revoked }
+    );
+  }
+  return revoked;
 };
 
 export const changePassword = async (
   userId: string,
-  input: ChangePasswordInput
+  input: ChangePasswordInput,
+  ctx?: RequestContext
 ): Promise<void> => {
   const user = await User.findById(userId).select('+passwordHash');
   if (!user) {
@@ -278,13 +321,25 @@ export const changePassword = async (
   user.passwordChangedAt = new Date();
   await user.save();
 
-  await Session.updateMany(
+  const result = await Session.updateMany(
     { userId: user._id, revokedAt: { $exists: false } },
     {
       $set: {
         revokedAt: new Date(),
         revokedReason: SESSION_REVOKED_REASON.PASSWORD_CHANGE
       }
+    }
+  );
+
+  await auditPasswordChanged(
+    {
+      actorId: userId,
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent
+    },
+    {
+      userId,
+      sessionsRevoked: (result.modifiedCount ?? 0) > 0
     }
   );
 };

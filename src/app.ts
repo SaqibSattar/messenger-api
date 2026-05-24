@@ -8,9 +8,14 @@ import { requestId, REQUEST_ID_HEADER } from './middleware/requestId';
 import { httpLogger } from './middleware/httpLogger';
 import { notFound } from './middleware/notFound';
 import { errorHandler } from './middleware/errorHandler';
+import { asyncHandler } from './middleware/asyncHandler';
+import { requireAuth } from './middleware/auth';
+import { requirePermission } from './middleware/requirePermission';
 import { ok } from './utils/apiResponse';
 import { isMongoReady } from './db/mongo';
 import { isRedisReady } from './db/redis';
+import { PERMISSIONS } from './modules/permissions/permissions.constants';
+import { getProcessMetrics } from './utils/metrics';
 import { authRouter } from './modules/auth/auth.routes';
 import { adminRouter } from './modules/admin/admin.routes';
 import { userRouter } from './modules/users/user.routes';
@@ -80,6 +85,20 @@ export const buildApp = (): Express => {
       data: { checks }
     });
   });
+
+  // Operational metrics. Behind admin auth so a public scrape cannot harvest
+  // dependency/process information. Returns only privacy-safe counters —
+  // process stats and collection sizes, never user-identifying data.
+  app.get(
+    '/metrics',
+    requireAuth,
+    requirePermission(PERMISSIONS.ADMIN_SYSTEM_READ),
+    asyncHandler(async (_req, res) => {
+      const metrics = await getProcessMetrics();
+      ok(res, metrics);
+      return undefined;
+    })
+  );
 
   app.use('/api/v1/auth', authRouter);
   app.use('/api/v1/users', userRouter);
