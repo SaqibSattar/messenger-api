@@ -10,9 +10,17 @@ import {
   type Role
 } from '../permissions/permissions.constants';
 import { REPORT_STATUS, REPORT_TARGET_TYPE } from '../moderation/report.types';
+import { Device } from '../devices/device.model';
+import {
+  DEVICE_PLATFORM,
+  DEVICE_PUSH_PROVIDER
+} from '../devices/device.types';
 import { Notification } from './notification.model';
 import { NotificationPreference } from './notificationPreference.model';
+import { ConversationNotificationPreference } from './conversationNotificationPreference.model';
 import { NOTIFICATION_TYPE } from './notification.types';
+import { createNotification } from './notification.service';
+import * as pushJobModule from '../../jobs/pushNotificationJob';
 
 const app = buildApp();
 const PASSWORD = 'correct horse battery';
@@ -287,6 +295,8 @@ describe('notification preferences', () => {
       pushEnabled: true,
       emailEnabled: false,
       messagePreviewEnabled: true,
+      soundEnabled: true,
+      vibrationEnabled: true,
       mutedConversationIds: []
     });
 
@@ -383,5 +393,185 @@ describe('report status changes notify the reporter', () => {
     expect(aliceNotifs).toHaveLength(1);
     expect(aliceNotifs[0].type).toBe(NOTIFICATION_TYPE.REPORT_STATUS_CHANGED);
     expect(aliceNotifs[0].title).toContain('resolved');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Push payload privacy
+//
+// `enqueuePushNotification` is spied so we can assert the exact shape the
+// fan-out worker would receive WITHOUT depending on the worker actually
+// running. The inbox row is the authoritative record either way — these
+// tests cover the privacy gate between inbox and transport.
+// ---------------------------------------------------------------------------
+
+describe('push payload privacy', () => {
+  let enqueueSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    enqueueSpy = jest
+      .spyOn(pushJobModule, 'enqueuePushNotification')
+      .mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    enqueueSpy.mockRestore();
+  });
+
+  it('includes the body preview by default', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    const convId = await createDirect(alice, bob);
+
+    await sendMessage(alice, convId, 'private hello');
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const payload = enqueueSpy.mock.calls[0][0];
+    expect(payload.userId).toBe(bob.id);
+    expect(payload.bodyPreview).toBe('private hello');
+    // Token must never appear on the queue payload.
+    expect(payload).not.toHaveProperty('pushToken');
+  });
+
+  it('strips the preview when messagePreviewEnabled is false', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    await request(app)
+      .patch('/api/v1/notification-preferences')
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ messagePreviewEnabled: false });
+
+    const convId = await createDirect(alice, bob);
+    await sendMessage(alice, convId, 'secret');
+
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const payload = enqueueSpy.mock.calls[0][0];
+    expect(payload.bodyPreview).toBeUndefined();
+    expect(payload.title).toBeTruthy();
+  });
+
+  it('suppresses push when pushEnabled is false but still writes the inbox row', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    await request(app)
+      .patch('/api/v1/notification-preferences')
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ pushEnabled: false });
+
+    const convId = await createDirect(alice, bob);
+    await sendMessage(alice, convId, 'hi');
+
+    expect(enqueueSpy).not.toHaveBeenCalled();
+    const inbox = await Notification.find({ userId: bob.id });
+    expect(inbox).toHaveLength(1);
+  });
+
+  it('never carries a preview for moderation-action notifications', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    await createNotification({
+      userId: alice.id,
+      type: NOTIFICATION_TYPE.MODERATION_ACTION,
+      title: 'A moderation action was taken on your account',
+      bodyPreview: 'sensitive details about the case'
+    });
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    const payload = enqueueSpy.mock.calls[0][0];
+    expect(payload.bodyPreview).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-conversation notification preferences
+// ---------------------------------------------------------------------------
+
+describe('conversation notification preferences', () => {
+  it('rejects access for non-members (404)', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    const eve = await seedUser('eve@example.com', 'Eve');
+    const convId = await createDirect(alice, bob);
+
+    const res = await request(app)
+      .get(`/api/v1/conversations/${convId}/notification-preferences`)
+      .set('Authorization', `Bearer ${eve.token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('persists muted-until and mention-only for a member', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    const convId = await createDirect(alice, bob);
+
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const res = await request(app)
+      .patch(`/api/v1/conversations/${convId}/notification-preferences`)
+      .set('Authorization', `Bearer ${bob.token}`)
+      .send({ mutedUntil: future, mentionOnly: true });
+    expect(res.status).toBe(200);
+    expect(res.body.data.preference.mentionOnly).toBe(true);
+    expect(res.body.data.preference.mutedUntil).toBe(future);
+
+    const stored = await ConversationNotificationPreference.findOne({
+      userId: bob.id,
+      conversationId: convId
+    });
+    expect(stored?.mentionOnly).toBe(true);
+    expect(stored?.mutedUntil?.toISOString()).toBe(future);
+  });
+
+  it('suppresses push when conversation mutedUntil is in the future', async () => {
+    const spy = jest
+      .spyOn(pushJobModule, 'enqueuePushNotification')
+      .mockImplementation(() => undefined);
+    try {
+      const alice = await seedUser('alice@example.com', 'Alice');
+      const bob = await seedUser('bob@example.com', 'Bob');
+      const convId = await createDirect(alice, bob);
+
+      const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await request(app)
+        .patch(`/api/v1/conversations/${convId}/notification-preferences`)
+        .set('Authorization', `Bearer ${bob.token}`)
+        .send({ mutedUntil: future });
+
+      await sendMessage(alice, convId, 'hi');
+
+      // No push fan-out for Bob even though Alice's message succeeded.
+      expect(spy).not.toHaveBeenCalled();
+      // Inbox row still written.
+      const inbox = await Notification.find({ userId: bob.id });
+      expect(inbox).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cross-user device push suppression
+// ---------------------------------------------------------------------------
+
+describe('push worker only loads recipient devices', () => {
+  it('does not load tokens for other users', async () => {
+    const alice = await seedUser('alice@example.com', 'Alice');
+    const bob = await seedUser('bob@example.com', 'Bob');
+    await Device.create({
+      userId: alice.id,
+      platform: DEVICE_PLATFORM.IOS,
+      pushProvider: DEVICE_PUSH_PROVIDER.APNS,
+      pushToken: 'alice-tok'
+    });
+    await Device.create({
+      userId: bob.id,
+      platform: DEVICE_PLATFORM.ANDROID,
+      pushProvider: DEVICE_PUSH_PROVIDER.FCM,
+      pushToken: 'bob-tok'
+    });
+
+    const { loadActiveDevicesForUser } = await import(
+      '../devices/device.service'
+    );
+    const bobDevices = await loadActiveDevicesForUser(bob.id);
+    expect(bobDevices).toHaveLength(1);
+    expect(bobDevices[0].pushToken).toBe('bob-tok');
   });
 });

@@ -33,9 +33,11 @@ import {
   reportRouter
 } from './modules/moderation/moderation.routes';
 import {
+  conversationNotificationPreferencesRouter,
   notificationPreferencesRouter,
   notificationRouter
 } from './modules/notifications/notification.routes';
+import { deviceRouter } from './modules/devices/device.routes';
 import { searchRouter } from './modules/search/search.routes';
 import { contactRouter } from './modules/contacts/contact.routes';
 import {
@@ -143,6 +145,10 @@ export const buildApp = (): Express => {
     '/api/v1/conversations/:conversationId/invites',
     conversationInvitesRouter
   );
+  app.use(
+    '/api/v1/conversations/:conversationId/notification-preferences',
+    conversationNotificationPreferencesRouter
+  );
   app.use('/api/v1/conversations', conversationRouter);
   app.use('/api/v1/messages', messageRouter);
   app.use('/api/v1/media', mediaRouter);
@@ -153,6 +159,7 @@ export const buildApp = (): Express => {
   app.use('/api/v1/search', searchRouter);
   app.use('/api/v1/notifications', notificationRouter);
   app.use('/api/v1/notification-preferences', notificationPreferencesRouter);
+  app.use('/api/v1/devices', deviceRouter);
   app.use('/api/v1/contacts', contactRouter);
   app.use('/api/v1/invites', inviteRouter);
   app.use('/api/v1/privacy-settings', privacyRouter);

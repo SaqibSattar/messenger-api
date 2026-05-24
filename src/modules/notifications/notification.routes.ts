@@ -7,16 +7,20 @@ import { requirePermission } from '../../middleware/requirePermission';
 import { validate } from '../../middleware/validate';
 import { PERMISSIONS } from '../permissions/permissions.constants';
 import {
+  getConversationNotificationPreferenceHandler,
   getNotificationPreferencesHandler,
   listNotificationsHandler,
   markAllNotificationsReadHandler,
   markNotificationReadHandler,
   markNotificationUnreadHandler,
+  updateConversationNotificationPreferenceHandler,
   updateNotificationPreferencesHandler
 } from './notification.controller';
 import {
+  conversationNotificationPreferenceParamSchema,
   listNotificationsQuerySchema,
   notificationIdParamSchema,
+  updateConversationNotificationPreferenceSchema,
   updateNotificationPreferencesSchema
 } from './notification.validation';
 
@@ -89,4 +93,35 @@ notificationPreferencesRouter.patch(
   requirePermission(PERMISSIONS.NOTIFICATION_MANAGE_OWN),
   validate(updateNotificationPreferencesSchema),
   asyncHandler(updateNotificationPreferencesHandler)
+);
+
+// ---------------------------------------------------------------------------
+// /api/v1/conversations/:conversationId/notification-preferences
+//
+// Mounted as a child router so it inherits the parent's :conversationId
+// param. Membership is enforced inside the service (resource-level rule),
+// not via requirePermission middleware, because the permission to manage
+// notification settings is platform-wide while membership is per-conversation.
+// ---------------------------------------------------------------------------
+
+export const conversationNotificationPreferencesRouter: Router = Router({
+  mergeParams: true
+});
+
+conversationNotificationPreferencesRouter.use(requireAuth);
+
+conversationNotificationPreferencesRouter.get(
+  '/',
+  requirePermission(PERMISSIONS.NOTIFICATION_MANAGE_OWN),
+  validate(conversationNotificationPreferenceParamSchema, 'params'),
+  asyncHandler(getConversationNotificationPreferenceHandler)
+);
+
+conversationNotificationPreferencesRouter.patch(
+  '/',
+  limiter(60, 60 * 1000),
+  requirePermission(PERMISSIONS.NOTIFICATION_MANAGE_OWN),
+  validate(conversationNotificationPreferenceParamSchema, 'params'),
+  validate(updateConversationNotificationPreferenceSchema),
+  asyncHandler(updateConversationNotificationPreferenceHandler)
 );

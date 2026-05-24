@@ -1,10 +1,12 @@
 import mongoose, { type FilterQuery, type Types } from 'mongoose';
-import { NotFoundError } from '../../utils/errors';
+import { ForbiddenError, NotFoundError } from '../../utils/errors';
 import { enqueuePushNotification } from '../../jobs/pushNotificationJob';
 import {
   assertCanAccessNotification,
+  assertConversationMembership,
   type AuthenticatedActor
 } from '../permissions/authorization';
+import { ConversationMember } from '../conversations/conversationMember.model';
 import {
   Notification,
   toNotificationDto,
@@ -16,16 +18,25 @@ import {
   type NotificationPreferenceDocument
 } from './notificationPreference.model';
 import {
+  ConversationNotificationPreference,
+  toConversationNotificationPreferenceDto
+} from './conversationNotificationPreference.model';
+import {
   DEFAULT_NOTIFICATION_PREFERENCES,
   NOTIFICATION_BODY_PREVIEW_MAX_LENGTH,
   NOTIFICATION_TITLE_MAX_LENGTH,
+  NOTIFICATION_TYPE,
+  QUIET_HOURS_MINUTES_PER_DAY,
+  type ConversationNotificationPreferenceDto,
   type CreateNotificationInput,
   type ListNotificationsResult,
   type NotificationDto,
-  type NotificationPreferencesDto
+  type NotificationPreferencesDto,
+  type QuietHoursDto
 } from './notification.types';
 import type {
   ListNotificationsQuery,
+  UpdateConversationNotificationPreferenceInput,
   UpdateNotificationPreferencesInput
 } from './notification.validation';
 
@@ -68,6 +79,8 @@ const ensurePreferences = async (
         emailEnabled: DEFAULT_NOTIFICATION_PREFERENCES.emailEnabled,
         messagePreviewEnabled:
           DEFAULT_NOTIFICATION_PREFERENCES.messagePreviewEnabled,
+        soundEnabled: DEFAULT_NOTIFICATION_PREFERENCES.soundEnabled,
+        vibrationEnabled: DEFAULT_NOTIFICATION_PREFERENCES.vibrationEnabled,
         mutedConversationIds: []
       }
     },
@@ -94,6 +107,24 @@ export const updatePreferences = async (
   if (input.messagePreviewEnabled !== undefined) {
     doc.messagePreviewEnabled = input.messagePreviewEnabled;
   }
+  if (input.soundEnabled !== undefined) doc.soundEnabled = input.soundEnabled;
+  if (input.vibrationEnabled !== undefined) {
+    doc.vibrationEnabled = input.vibrationEnabled;
+  }
+  if (input.quietHours !== undefined) {
+    // `null` clears the window; an object replaces it entirely. We don't
+    // patch sub-fields because the timezone+start+end tuple has to stay
+    // internally consistent.
+    if (input.quietHours === null) {
+      doc.quietHours = undefined;
+    } else {
+      doc.quietHours = {
+        startMinute: input.quietHours.startMinute,
+        endMinute: input.quietHours.endMinute,
+        timezone: input.quietHours.timezone
+      };
+    }
+  }
   if (input.mutedConversationIds !== undefined) {
     // Dedupe at write time so the document never accumulates duplicate ids
     // even if a client posts them.
@@ -103,6 +134,86 @@ export const updatePreferences = async (
 
   await doc.save();
   return toNotificationPreferencesDto(doc);
+};
+
+// ---------------------------------------------------------------------------
+// Per-conversation preference (mute window / mention-only)
+// ---------------------------------------------------------------------------
+
+// Verify the caller is a current member of the conversation before allowing
+// them to read or change a per-conversation preference. We reuse the
+// resource-level helper to keep the rule in one place; on failure we map
+// ForbiddenError → NotFoundError so a probing client cannot tell the
+// difference between "conversation doesn't exist" and "you're not in it".
+const assertConversationAccess = async (
+  actor: AuthenticatedActor,
+  conversationId: string
+): Promise<void> => {
+  const membership = await ConversationMember.findOne({
+    conversationId: toObjectId(conversationId),
+    userId: toObjectId(actor.id)
+  });
+  try {
+    assertConversationMembership(membership, actor, conversationId);
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      throw new NotFoundError('Conversation not found');
+    }
+    throw err;
+  }
+};
+
+export const getConversationNotificationPreference = async (
+  actor: AuthenticatedActor,
+  conversationId: string
+): Promise<ConversationNotificationPreferenceDto> => {
+  await assertConversationAccess(actor, conversationId);
+  const doc = await ConversationNotificationPreference.findOne({
+    userId: toObjectId(actor.id),
+    conversationId: toObjectId(conversationId)
+  });
+  if (!doc) {
+    return { conversationId, mentionOnly: false };
+  }
+  return toConversationNotificationPreferenceDto(doc);
+};
+
+export const updateConversationNotificationPreference = async (
+  actor: AuthenticatedActor,
+  conversationId: string,
+  input: UpdateConversationNotificationPreferenceInput
+): Promise<ConversationNotificationPreferenceDto> => {
+  await assertConversationAccess(actor, conversationId);
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
+
+  if (input.mutedUntil === null) {
+    unset.mutedUntil = 1;
+  } else if (typeof input.mutedUntil === 'string') {
+    set.mutedUntil = new Date(input.mutedUntil);
+  }
+  if (input.mentionOnly !== undefined) {
+    set.mentionOnly = input.mentionOnly;
+  }
+
+  const update: Record<string, Record<string, unknown>> = {
+    $setOnInsert: {
+      userId: toObjectId(actor.id),
+      conversationId: toObjectId(conversationId)
+    }
+  };
+  if (Object.keys(set).length > 0) update.$set = set;
+  if (Object.keys(unset).length > 0) update.$unset = unset;
+
+  const doc = await ConversationNotificationPreference.findOneAndUpdate(
+    {
+      userId: toObjectId(actor.id),
+      conversationId: toObjectId(conversationId)
+    },
+    update,
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+  return toConversationNotificationPreferenceDto(doc);
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +335,49 @@ interface CreateAndPushOptions {
   // recipient won't want a push (e.g. notifications about themselves, or
   // when the producing event is non-urgent).
   skipPush?: boolean;
+  // The recipient was explicitly mentioned. Used by the mention-only
+  // conversation preference: an unmentioned message in a mention-only
+  // conversation suppresses push (inbox still writes). Defaults to false.
+  isMention?: boolean;
 }
+
+// Compute whether the given moment falls inside the recipient's quiet-hours
+// window. The window is half-open `[start, end)` in the user's local clock.
+// A reversed window (`endMinute < startMinute`) wraps midnight — e.g.
+// `start=22:00, end=07:00` matches 22:00-23:59 and 00:00-06:59.
+const isInQuietHours = (qh: QuietHoursDto, at: Date): boolean => {
+  let minutes: number;
+  try {
+    // Intl.DateTimeFormat handles arbitrary IANA zones without us shipping a
+    // tz database. An unknown zone throws RangeError on format(); we catch
+    // that and treat it as "quiet hours not enforceable" — safer than
+    // accidentally muting because of a typo.
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: qh.timezone,
+      hour: 'numeric',
+      hour12: false,
+      minute: 'numeric'
+    });
+    const parts = formatter.formatToParts(at);
+    const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+    const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+    minutes = (hour % 24) * 60 + minute;
+  } catch {
+    return false;
+  }
+  if (
+    Number.isNaN(minutes) ||
+    minutes < 0 ||
+    minutes >= QUIET_HOURS_MINUTES_PER_DAY
+  ) {
+    return false;
+  }
+  if (qh.startMinute < qh.endMinute) {
+    return minutes >= qh.startMinute && minutes < qh.endMinute;
+  }
+  // Wrapped window — e.g. 22:00-07:00.
+  return minutes >= qh.startMinute || minutes < qh.endMinute;
+};
 
 // Write a notification for one user. Other modules import this — callers
 // must ensure they only write notifications for users with a legitimate
@@ -260,11 +413,56 @@ export const createNotification = async (
     // Honor the user's preferences before fanning out. Inbox row is always
     // written so the user can scroll back; only the push payload is gated.
     const prefs = await getEffectivePreferencesForUser(input.userId);
-    const muted =
+    const globallyMuted =
       !!input.conversationId &&
       prefs.mutedConversationIds.includes(input.conversationId);
 
-    if (prefs.pushEnabled && !muted) {
+    // Per-conversation override. The row only exists when the user has
+    // explicitly configured the conversation — we treat its absence as "no
+    // override" (defaults already covered by the inbox-level flags).
+    let perConvMuted = false;
+    let perConvMentionOnly = false;
+    if (input.conversationId) {
+      const conv = await ConversationNotificationPreference.findOne({
+        userId: toObjectId(input.userId),
+        conversationId: toObjectId(input.conversationId)
+      });
+      if (conv) {
+        if (conv.mutedUntil && conv.mutedUntil.getTime() > Date.now()) {
+          perConvMuted = true;
+        }
+        perConvMentionOnly = conv.mentionOnly;
+      }
+    }
+
+    const inQuietHours = prefs.quietHours
+      ? isInQuietHours(prefs.quietHours, new Date())
+      : false;
+
+    // Sensitive content categories never carry a preview in push payloads,
+    // regardless of the user's messagePreviewEnabled flag. Report status
+    // changes and moderation actions could leak the existence/details of a
+    // moderation case to anyone glancing at the lock screen.
+    const isSensitiveType =
+      input.type === NOTIFICATION_TYPE.REPORT_STATUS_CHANGED ||
+      input.type === NOTIFICATION_TYPE.MODERATION_ACTION;
+
+    const mentionGate =
+      perConvMentionOnly && !options.isMention && !isSensitiveType;
+
+    const shouldPush =
+      prefs.pushEnabled &&
+      !globallyMuted &&
+      !perConvMuted &&
+      !inQuietHours &&
+      !mentionGate;
+
+    if (shouldPush) {
+      const includePreview =
+        prefs.messagePreviewEnabled &&
+        !isSensitiveType &&
+        bodyPreview !== undefined &&
+        bodyPreview.length > 0;
       enqueuePushNotification({
         userId: input.userId,
         notificationId: (doc._id as Types.ObjectId).toString(),
@@ -273,9 +471,7 @@ export const createNotification = async (
         // Strip the preview when the user has opted out of message
         // previews. The recipient still gets "New message", just without
         // the body.
-        ...(prefs.messagePreviewEnabled && bodyPreview && bodyPreview.length > 0
-          ? { bodyPreview }
-          : {}),
+        ...(includePreview ? { bodyPreview } : {}),
         ...(input.conversationId
           ? { conversationId: input.conversationId }
           : {})

@@ -4,6 +4,7 @@ import { UnauthorizedError } from '../../utils/errors';
 import * as notificationService from './notification.service';
 import type {
   ListNotificationsQuery,
+  UpdateConversationNotificationPreferenceInput,
   UpdateNotificationPreferencesInput
 } from './notification.validation';
 
@@ -72,4 +73,32 @@ export const updateNotificationPreferencesHandler = async (
   const input = req.body as UpdateNotificationPreferencesInput;
   const preferences = await notificationService.updatePreferences(actor, input);
   ok(res, { preferences });
+};
+
+export const getConversationNotificationPreferenceHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const actor = requireActor(req);
+  const preference =
+    await notificationService.getConversationNotificationPreference(
+      actor,
+      req.params.conversationId
+    );
+  ok(res, { preference });
+};
+
+export const updateConversationNotificationPreferenceHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  const actor = requireActor(req);
+  const input = req.body as UpdateConversationNotificationPreferenceInput;
+  const preference =
+    await notificationService.updateConversationNotificationPreference(
+      actor,
+      req.params.conversationId,
+      input
+    );
+  ok(res, { preference });
 };

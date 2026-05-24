@@ -23,6 +23,7 @@ import '../../modules/moderation/moderationAction.model';
 import '../../modules/moderation/report.model';
 import '../../modules/notifications/notification.model';
 import '../../modules/notifications/notificationPreference.model';
+import '../../modules/notifications/conversationNotificationPreference.model';
 import '../../modules/sessions/session.model';
 import '../../modules/stories/story.model';
 import '../../modules/stories/storyMute.model';

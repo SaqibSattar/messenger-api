@@ -78,6 +78,22 @@ export interface ListNotificationsResult {
   unreadCount: number;
 }
 
+// Quiet hours are stored as wall-clock minutes-from-midnight in the user's
+// own local timezone. The worker computes "is the recipient inside their
+// quiet window right now" against an IANA zone name supplied by the client.
+// We keep the timezone on the preference (not on the user) so a user with
+// multiple devices in different timezones can pick the one that owns push.
+export interface QuietHoursDto {
+  startMinute: number;
+  endMinute: number;
+  timezone: string;
+}
+
+export const QUIET_HOURS_MINUTES_PER_DAY = 24 * 60;
+// IANA zone names are at most 60 chars in practice; a hard cap stops a
+// hostile client from stuffing the document with megabytes of garbage.
+export const QUIET_HOURS_TIMEZONE_MAX_LENGTH = 64;
+
 export interface NotificationPreferencesDto {
   // Master kill-switch for any push fan-out. When false the worker should
   // skip the user entirely.
@@ -88,9 +104,17 @@ export interface NotificationPreferencesDto {
   // When false the push/email payload must NOT include the message body or
   // any other free-text preview — only generic copy like "New message".
   messagePreviewEnabled: boolean;
-  // Conversation IDs the user has muted. Notifications for messages in these
-  // conversations are still written to the inbox (so the user can scroll
-  // back), but push delivery is suppressed.
+  // Whether the client should play a sound for incoming push. Server-side
+  // we just relay the flag; the client owns the actual sound asset.
+  soundEnabled: boolean;
+  // Whether the client should vibrate. Same relay-only semantics.
+  vibrationEnabled: boolean;
+  // Optional quiet-hours window. When set and the recipient is inside the
+  // window, push fan-out is suppressed (inbox rows still write).
+  quietHours?: QuietHoursDto;
+  // Conversation IDs the user has globally muted (push-only — inbox rows
+  // are still written so the user can scroll back). Kept for backward
+  // compatibility alongside the richer per-conversation preference rows.
   mutedConversationIds: string[];
 }
 
@@ -98,8 +122,17 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferencesDto = {
   pushEnabled: true,
   emailEnabled: false,
   messagePreviewEnabled: true,
+  soundEnabled: true,
+  vibrationEnabled: true,
   mutedConversationIds: []
 };
+
+export interface ConversationNotificationPreferenceDto {
+  conversationId: string;
+  // ISO datetime. Absent or in the past means "not muted".
+  mutedUntil?: string;
+  mentionOnly: boolean;
+}
 
 // Internal shape used when a service emits a notification. Callers always
 // pass IDs as strings; the model converts to ObjectId on write.

@@ -38,6 +38,8 @@ export const PERMISSIONS = {
   NOTIFICATION_READ_OWN: 'notification:read_own',
   NOTIFICATION_MANAGE_OWN: 'notification:manage_own',
 
+  DEVICE_MANAGE_OWN: 'device:manage_own',
+
   CONTACT_CREATE: 'contact:create',
   CONTACT_READ: 'contact:read',
   CONTACT_MANAGE_OWN: 'contact:manage_own',
@@ -72,6 +74,7 @@ const memberPermissions: Permission[] = [
   PERMISSIONS.REPORT_READ_OWN,
   PERMISSIONS.NOTIFICATION_READ_OWN,
   PERMISSIONS.NOTIFICATION_MANAGE_OWN,
+  PERMISSIONS.DEVICE_MANAGE_OWN,
   PERMISSIONS.CONTACT_CREATE,
   PERMISSIONS.CONTACT_READ,
   PERMISSIONS.CONTACT_MANAGE_OWN,
