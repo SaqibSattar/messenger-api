@@ -18,7 +18,19 @@ const schema = z.object({
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL: z.string().default('30d'),
   PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(128).default(8),
-  PASSWORD_MAX_LENGTH: z.coerce.number().int().min(8).max(256).default(128)
+  PASSWORD_MAX_LENGTH: z.coerce.number().int().min(8).max(256).default(128),
+  // Realtime/socket settings.
+  SOCKET_PATH: z.string().default('/socket.io'),
+  // Per-socket cap for typing.* events. A noisy client (or an attacker on a
+  // valid session) cannot meaningfully exceed this without being rate-limited.
+  SOCKET_TYPING_MAX_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60),
+  // How long a presence entry survives without a refresh. presence.ping resets
+  // the TTL; the cleanup job and disconnect handler also remove stale entries.
+  PRESENCE_TTL_SECONDS: z.coerce.number().int().positive().default(90)
 });
 
 const parsed = schema.safeParse(process.env);
