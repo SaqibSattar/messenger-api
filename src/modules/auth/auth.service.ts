@@ -176,7 +176,13 @@ export const login = async (
     throw new UnauthorizedError('Invalid credentials');
   }
 
-  if (user.status !== USER_STATUS.ACTIVE) {
+  // Login is allowed for ACTIVE and PENDING_DELETION (so a user inside the
+  // grace window can sign back in to cancel their deletion). SUSPENDED,
+  // DEACTIVATED, and DELETED all collapse to a generic 401.
+  if (
+    user.status !== USER_STATUS.ACTIVE &&
+    user.status !== USER_STATUS.PENDING_DELETION
+  ) {
     throw new UnauthorizedError('Account is not active');
   }
 
@@ -239,7 +245,14 @@ export const refresh = async (
   }
 
   const user = await User.findById(session.userId);
-  if (!user || user.status !== USER_STATUS.ACTIVE) {
+  // Mirror login: refresh works for PENDING_DELETION so the user can roll
+  // sessions while inside the grace window. DEACTIVATED / DELETED / SUSPENDED
+  // all collapse to a generic 401.
+  if (
+    !user ||
+    (user.status !== USER_STATUS.ACTIVE &&
+      user.status !== USER_STATUS.PENDING_DELETION)
+  ) {
     throw new UnauthorizedError('Account is not active');
   }
 

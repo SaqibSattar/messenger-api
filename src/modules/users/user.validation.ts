@@ -170,6 +170,22 @@ export const deactivateAccountSchema = z
   })
   .strict();
 
+// Delete-request reuses the password-confirm shape but does NOT accept a
+// `reason` — the deletion record itself is the artifact, free-text comments
+// would just give us a privacy-sensitive field to keep out of logs.
+export const requestDeletionSchema = z
+  .object({
+    password: z.string().min(1).max(env.PASSWORD_MAX_LENGTH)
+  })
+  .strict();
+
+// Cancel takes no body — the route is purely an action. We still validate so
+// a body with extra fields is rejected (strict mode) rather than silently
+// ignored.
+export const cancelDeletionSchema = z.object({}).strict();
+
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type SearchUsersInput = z.infer<typeof searchUsersSchema>;
 export type DeactivateAccountInput = z.infer<typeof deactivateAccountSchema>;
+export type RequestDeletionInput = z.infer<typeof requestDeletionSchema>;
+export type CancelDeletionInput = z.infer<typeof cancelDeletionSchema>;

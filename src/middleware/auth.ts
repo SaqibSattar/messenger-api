@@ -34,7 +34,16 @@ export const requireAuth = async (
 
   try {
     const user = await User.findById(payload.sub).select('+passwordChangedAt');
-    if (!user || user.status !== USER_STATUS.ACTIVE) {
+    // Allow ACTIVE through normally. PENDING_DELETION is allowed so the user
+    // can still cancel the deletion (and reach /me + /me/delete-cancel +
+    // /me/data-export) during the grace window — but a delete-request also
+    // revokes every existing session, so any token reaching this branch was
+    // issued *after* the request via a deliberate re-login.
+    if (
+      !user ||
+      (user.status !== USER_STATUS.ACTIVE &&
+        user.status !== USER_STATUS.PENDING_DELETION)
+    ) {
       next(new UnauthorizedError());
       return;
     }

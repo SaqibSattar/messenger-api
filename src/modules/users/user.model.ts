@@ -32,6 +32,13 @@ export interface UserAttrs {
   lastLoginAt?: Date;
   passwordChangedAt?: Date;
   deactivatedAt?: Date;
+  // Deletion lifecycle. `deletionRequestedAt` and `deletionScheduledFor` are
+  // set when the user calls /me/delete-request and cleared by /me/delete-cancel.
+  // `deletedAt` is stamped by the finalization job when status flips to
+  // DELETED, at which point the document has been anonymized.
+  deletionRequestedAt?: Date;
+  deletionScheduledFor?: Date;
+  deletedAt?: Date;
 }
 
 export interface UserDocument extends UserAttrs, mongoose.Document {
@@ -128,7 +135,10 @@ const userSchema = new Schema<UserDocument>(
     phoneVerifiedAt: { type: Date },
     lastLoginAt: { type: Date },
     passwordChangedAt: { type: Date, select: false },
-    deactivatedAt: { type: Date }
+    deactivatedAt: { type: Date },
+    deletionRequestedAt: { type: Date },
+    deletionScheduledFor: { type: Date, index: true },
+    deletedAt: { type: Date }
   },
   { timestamps: true, strict: 'throw' }
 );
@@ -204,6 +214,11 @@ export const toUserDto = (user: UserDocument): UserDto => {
     dto.phoneVerifiedAt = user.phoneVerifiedAt.toISOString();
   if (user.lastLoginAt) dto.lastLoginAt = user.lastLoginAt.toISOString();
   if (user.deactivatedAt) dto.deactivatedAt = user.deactivatedAt.toISOString();
+  if (user.deletionRequestedAt)
+    dto.deletionRequestedAt = user.deletionRequestedAt.toISOString();
+  if (user.deletionScheduledFor)
+    dto.deletionScheduledFor = user.deletionScheduledFor.toISOString();
+  if (user.deletedAt) dto.deletedAt = user.deletedAt.toISOString();
   return dto;
 };
 

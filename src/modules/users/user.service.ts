@@ -5,6 +5,8 @@ import {
   NotFoundError,
   UnauthorizedError
 } from '../../utils/errors';
+import { auditUserDeactivated } from '../../utils/audit';
+import type { RequestContext } from '../auth/auth.types';
 import {
   Session,
   SESSION_REVOKED_REASON
@@ -182,7 +184,8 @@ export const searchUsers = async (
 
 export const deactivateAccount = async (
   userId: string,
-  input: DeactivateAccountInput
+  input: DeactivateAccountInput,
+  ctx?: RequestContext
 ): Promise<void> => {
   // Require password confirmation: a stolen access token alone must not be
   // enough to kill an account.
@@ -204,5 +207,17 @@ export const deactivateAccount = async (
         revokedReason: SESSION_REVOKED_REASON.LOGOUT_ALL
       }
     }
+  );
+
+  // Audit row outlives the user document — the reason text is never logged
+  // (it would be the user's free-form farewell, no operational value), only
+  // the presence flag.
+  await auditUserDeactivated(
+    {
+      actorId: userId,
+      ipAddress: ctx?.ipAddress,
+      userAgent: ctx?.userAgent
+    },
+    { userId, hasReason: input.reason !== undefined }
   );
 };

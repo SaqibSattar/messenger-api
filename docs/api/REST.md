@@ -80,8 +80,48 @@ generic message.
 | `GET`   | `/me` | Current user profile. | Bearer | — |
 | `PATCH` | `/me` | Update display name / bio / avatar. | Bearer | — |
 | `POST`  | `/me/deactivate` | Soft-deactivate the account; revokes sessions. | Bearer | 5 / hour |
+| `POST`  | `/me/delete-request` | Schedule account deletion (30-day grace). Password-confirmed. Revokes sessions and devices. | Bearer | 5 / hour |
+| `POST`  | `/me/delete-cancel` | Cancel a pending deletion. | Bearer | 10 / hour |
+| `GET`   | `/me/data-export` | JSON export of the caller's data. Excludes secrets/tokens. | Bearer | 3 / hour |
 | `GET`   | `/search?q=...&limit=...` | Find users by display name / username. Respects `whoCanFindMe`. | Bearer | 30 / 60 s |
 | `GET`   | `/:userId/public` | Public profile fields only. Respects `profilePhotoVisibility`. | Bearer | — |
+
+See [PRIVACY_RETENTION.md](../PRIVACY_RETENTION.md) for the full lifecycle
+state machine (active → pending_deletion → deleted), what finalization
+preserves vs deletes, and retention windows for sessions, notifications,
+invites, and reports.
+
+### Example — delete-request
+
+```http
+POST /api/v1/users/me/delete-request
+Authorization: Bearer <accessToken>
+Content-Type: application/json
+
+{ "password": "<current password>" }
+```
+
+Response (`200`):
+
+```json
+{
+  "success": true,
+  "data": {
+    "user": { "id": "65f...", "status": "pending_deletion", "deletionScheduledFor": "2026-06-23T10:15:30.000Z" },
+    "deletion": {
+      "deletionRequested": true,
+      "requestedAt": "2026-05-24T10:15:30.000Z",
+      "scheduledFor": "2026-06-23T10:15:30.000Z",
+      "graceDaysRemaining": 30,
+      "state": "pending"
+    }
+  }
+}
+```
+
+The request immediately revokes every active session (existing refresh
+tokens stop working) and every push device. The user can still sign back in
+to reach `/me/delete-cancel` or `/me/data-export` during the grace window.
 
 ---
 

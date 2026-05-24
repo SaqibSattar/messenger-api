@@ -331,3 +331,114 @@ export const auditSessionsRevokedAll = async (
     metadata: { revokedCount: event.revokedCount }
   });
 };
+
+// ---------------------------------------------------------------------------
+// Account-lifecycle events (prompt 16: privacy / retention / deletion)
+//
+// These rows survive the user document itself — a finalized account is
+// anonymized, but the audit trail of who initiated deactivation/deletion (and
+// when) is preserved with `targetId` pointing at the now-deleted user id.
+// Sensitive material (passwords, exported file bodies, message text) is never
+// included in the metadata.
+// ---------------------------------------------------------------------------
+
+export interface UserDeactivatedEvent {
+  userId: string;
+  hasReason: boolean;
+}
+
+export const auditUserDeactivated = async (
+  ctx: AuditContext,
+  event: UserDeactivatedEvent
+): Promise<void> => {
+  await emitAudit(AUDIT_ACTION.USER_DEACTIVATED, ctx, {
+    targetType: AUDIT_TARGET_TYPE.USER,
+    targetId: event.userId,
+    metadata: { hasReason: event.hasReason }
+  });
+};
+
+export interface UserDeletionRequestedEvent {
+  userId: string;
+  scheduledFor: Date;
+  sessionsRevoked: number;
+  devicesRevoked: number;
+}
+
+export const auditUserDeletionRequested = async (
+  ctx: AuditContext,
+  event: UserDeletionRequestedEvent
+): Promise<void> => {
+  await emitAudit(AUDIT_ACTION.USER_DELETION_REQUESTED, ctx, {
+    targetType: AUDIT_TARGET_TYPE.USER,
+    targetId: event.userId,
+    metadata: {
+      scheduledFor: event.scheduledFor.toISOString(),
+      sessionsRevoked: event.sessionsRevoked,
+      devicesRevoked: event.devicesRevoked
+    }
+  });
+};
+
+export interface UserDeletionCancelledEvent {
+  userId: string;
+}
+
+export const auditUserDeletionCancelled = async (
+  ctx: AuditContext,
+  event: UserDeletionCancelledEvent
+): Promise<void> => {
+  await emitAudit(AUDIT_ACTION.USER_DELETION_CANCELLED, ctx, {
+    targetType: AUDIT_TARGET_TYPE.USER,
+    targetId: event.userId,
+    metadata: {}
+  });
+};
+
+export interface UserDeletionFinalizedEvent {
+  userId: string;
+  // Counters describing the side-effects of the finalize sweep, useful for
+  // confirming the cleanup actually happened without exposing identities.
+  sideEffects: {
+    sessionsDeleted: number;
+    devicesDeleted: number;
+    notificationsDeleted: number;
+    contactsDeleted: number;
+    contactRequestsDeleted: number;
+    blocksDeleted: number;
+    pendingInvitesRevoked: number;
+    privateAttachmentsDeleted: number;
+  };
+}
+
+export const auditUserDeletionFinalized = async (
+  ctx: AuditContext,
+  event: UserDeletionFinalizedEvent
+): Promise<void> => {
+  await emitAudit(AUDIT_ACTION.USER_DELETION_FINALIZED, ctx, {
+    targetType: AUDIT_TARGET_TYPE.USER,
+    targetId: event.userId,
+    metadata: { ...event.sideEffects }
+  });
+};
+
+export interface UserDataExportedEvent {
+  userId: string;
+  // Sizes only — never the export contents.
+  messageCount: number;
+  conversationCount: number;
+}
+
+export const auditUserDataExported = async (
+  ctx: AuditContext,
+  event: UserDataExportedEvent
+): Promise<void> => {
+  await emitAudit(AUDIT_ACTION.USER_DATA_EXPORTED, ctx, {
+    targetType: AUDIT_TARGET_TYPE.USER,
+    targetId: event.userId,
+    metadata: {
+      messageCount: event.messageCount,
+      conversationCount: event.conversationCount
+    }
+  });
+};

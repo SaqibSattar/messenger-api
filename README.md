@@ -161,7 +161,12 @@ the rest are the operator's responsibility.
       headers, password hashes, tokens, OTPs, and `*.code` fields; do not
       add log lines that bypass this.
 - [ ] Background TTL/cleanup jobs (`src/jobs/*`) are scheduled — they
-      are not started by the HTTP process.
+      are not started by the HTTP process. At minimum:
+      `expireMessages`, `cleanupAttachments`, `cleanupDevices`,
+      `cleanupNotifications`, `cleanupInvites`, `cleanupSessions`, and
+      `finalizeAccountDeletions`. See
+      [`docs/PRIVACY_RETENTION.md`](docs/PRIVACY_RETENTION.md) for the
+      retention windows each of these enforces.
 
 ### Security smoke checks
 - [ ] `curl -X OPTIONS -H 'Origin: https://evil.example' ...` does not
@@ -192,6 +197,8 @@ The test suite covers the security-critical surfaces called out in
 - media upload restrictions
 - socket authentication
 - contacts and contact-request lifecycle (block/self-request/duplicate rules)
+- account-deletion lifecycle (request → grace window → finalize), session
+  and device revocation, data export, and cleanup-job idempotency
 - invite links (token hashing, expiry, revocation, maxUses, block bypass)
 - privacy settings enforcement (`whoCanFindMe` / `whoCanMessageMe` /
   `profilePhotoVisibility` gating search, DM creation, and public profile)

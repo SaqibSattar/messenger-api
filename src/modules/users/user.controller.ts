@@ -2,8 +2,10 @@ import type { Request, Response } from 'express';
 import { ok } from '../../utils/apiResponse';
 import { UnauthorizedError } from '../../utils/errors';
 import * as userService from './user.service';
+import * as accountLifecycle from '../privacy/accountLifecycle.service';
 import type {
   DeactivateAccountInput,
+  RequestDeletionInput,
   SearchUsersInput,
   UpdateProfileInput
 } from './user.validation';
@@ -56,6 +58,55 @@ export const deactivateMeHandler = async (
 ): Promise<void> => {
   if (!req.user) throw new UnauthorizedError();
   const input = req.body as DeactivateAccountInput;
-  await userService.deactivateAccount(req.user.id, input);
+  await userService.deactivateAccount(req.user.id, input, {
+    userAgent: req.header('user-agent') ?? undefined,
+    ipAddress: req.ip
+  });
   ok(res, { success: true });
+};
+
+const requestContextFrom = (req: Request) => ({
+  userAgent: req.header('user-agent') ?? undefined,
+  ipAddress: req.ip
+});
+
+export const requestDeleteMeHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  if (!req.user) throw new UnauthorizedError();
+  const input = req.body as RequestDeletionInput;
+  const result = await accountLifecycle.requestAccountDeletion(
+    req.user,
+    input,
+    requestContextFrom(req)
+  );
+  ok(res, result);
+};
+
+export const cancelDeleteMeHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  if (!req.user) throw new UnauthorizedError();
+  const result = await accountLifecycle.cancelAccountDeletion(
+    req.user,
+    requestContextFrom(req)
+  );
+  ok(res, result);
+};
+
+export const dataExportMeHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  if (!req.user) throw new UnauthorizedError();
+  const dump = await accountLifecycle.exportMyData(
+    req.user,
+    requestContextFrom(req)
+  );
+  // Surfaced under `data` per the standard envelope. Clients may download as
+  // JSON directly; an "attachment" content disposition is not necessary
+  // because the body is wrapped in the standard success shape.
+  ok(res, dump);
 };

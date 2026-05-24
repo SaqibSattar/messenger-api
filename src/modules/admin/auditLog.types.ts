@@ -24,6 +24,11 @@ export const AUDIT_ACTION = {
   USER_PERMISSIONS_CHANGE: 'user.permissions.change',
   USER_LOGIN_FAILED: 'user.login.failed',
   USER_PASSWORD_CHANGED: 'user.password.changed',
+  USER_DEACTIVATED: 'user.deactivated',
+  USER_DELETION_REQUESTED: 'user.deletion.requested',
+  USER_DELETION_CANCELLED: 'user.deletion.cancelled',
+  USER_DELETION_FINALIZED: 'user.deletion.finalized',
+  USER_DATA_EXPORTED: 'user.data.exported',
   SESSION_REVOKED_ALL: 'session.revoked_all',
   CONVERSATION_DISAPPEARING_MESSAGES_CHANGE:
     'conversation.disappearing_messages.change',

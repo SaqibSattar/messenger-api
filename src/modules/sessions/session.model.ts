@@ -5,7 +5,9 @@ export const SESSION_REVOKED_REASON = {
   LOGOUT_ALL: 'logout_all',
   ROTATED: 'rotated',
   REUSED: 'reused',
-  PASSWORD_CHANGE: 'password_change'
+  PASSWORD_CHANGE: 'password_change',
+  DELETION_REQUEST: 'deletion_request',
+  ACCOUNT_DELETED: 'account_deleted'
 } as const;
 
 export type SessionRevokedReason =

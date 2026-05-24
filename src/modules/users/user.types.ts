@@ -3,10 +3,23 @@ import type { Permission, Role } from '../permissions/permissions.constants';
 export const USER_STATUS = {
   ACTIVE: 'active',
   SUSPENDED: 'suspended',
-  DEACTIVATED: 'deactivated'
+  DEACTIVATED: 'deactivated',
+  // The user has submitted a delete-request and is inside the grace window.
+  // Sessions and devices have been revoked; the account can still log in to
+  // cancel deletion but is hidden from discovery and DM creation surfaces.
+  PENDING_DELETION: 'pending_deletion',
+  // Finalization has run. The user document is anonymized and login is
+  // refused outright — only the stable `_id` is preserved so historical
+  // conversations rendered by other participants still resolve.
+  DELETED: 'deleted'
 } as const;
 
 export type UserStatus = (typeof USER_STATUS)[keyof typeof USER_STATUS];
+
+// Display name used on the user document after finalization. Read by client
+// code via the public DTO; we keep the name here so a future locale-aware
+// renderer can override it without searching the codebase.
+export const DELETED_USER_DISPLAY_NAME = 'Deleted user';
 
 // Visibility scope for privacy-sensitive surfaces.
 // `everyone`  — any authenticated user
@@ -77,6 +90,11 @@ export interface UserDto {
   phoneVerifiedAt?: string;
   lastLoginAt?: string;
   deactivatedAt?: string;
+  // Deletion-lifecycle fields. Surfaced to the owner so the client can render
+  // a "your account is scheduled for deletion on …" banner and a cancel CTA.
+  deletionRequestedAt?: string;
+  deletionScheduledFor?: string;
+  deletedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
